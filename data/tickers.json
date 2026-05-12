@@ -1,0 +1,112 @@
+{
+  "_meta": {
+    "description": "BIST hisse senedi ticker listesi. aliases alanı farklı kaynaklardaki kod farklılıklarını çözer.",
+    "last_updated": "2026-05-01",
+    "source": "manuel"
+  },
+  "THYAO": {
+    "code": "THYAO",
+    "name": "Türk Hava Yolları",
+    "sector": "Ulaştırma",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "GARAN": {
+    "code": "GARAN",
+    "name": "Garanti BBVA",
+    "sector": "Bankacılık",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "AKBNK": {
+    "code": "AKBNK",
+    "name": "Akbank",
+    "sector": "Bankacılık",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "ISCTR": {
+    "code": "ISCTR",
+    "name": "İş Bankası C",
+    "sector": "Bankacılık",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "YKBNK": {
+    "code": "YKBNK",
+    "name": "Yapı Kredi Bankası",
+    "sector": "Bankacılık",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "SISE": {
+    "code": "SISE",
+    "name": "Şişe Cam",
+    "sector": "Cam",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "KCHOL": {
+    "code": "KCHOL",
+    "name": "Koç Holding",
+    "sector": "Holding",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "SAHOL": {
+    "code": "SAHOL",
+    "name": "Sabancı Holding",
+    "sector": "Holding",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "BIMAS": {
+    "code": "BIMAS",
+    "name": "BİM Birleşik Mağazalar",
+    "sector": "Perakende",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "ASELS": {
+    "code": "ASELS",
+    "name": "Aselsan",
+    "sector": "Savunma",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "EREGL": {
+    "code": "EREGL",
+    "name": "Ereğli Demir Çelik",
+    "sector": "Metal Ana Sanayi",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "TUPRS": {
+    "code": "TUPRS",
+    "name": "Tüpraş",
+    "sector": "Petrol Rafinerisi",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "FROTO": {
+    "code": "FROTO",
+    "name": "Ford Otosan",
+    "sector": "Otomotiv",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "TOASO": {
+    "code": "TOASO",
+    "name": "Tofaş Oto Fab.",
+    "sector": "Otomotiv",
+    "market": "BIST",
+    "aliases": {}
+  },
+  "PGSUS": {
+    "code": "PGSUS",
+    "name": "Pegasus Hava Taşımacılığı",
+    "sector": "Ulaştırma",
+    "market": "BIST",
+    "aliases": {}
+  }
+}

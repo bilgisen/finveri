@@ -143,6 +143,31 @@ class AAMarketSummarySource(BaseSource):
             items_sorted = sorted(items, key=lambda x: (x.get("Kolon", 99), x.get("Sira", 99)))
             data = [self._normalize(item) for item in items_sorted]
 
+            # Is Yatirim'dan gercek zamanli BIST 30 (XU030) ve BIST Banka (XBANK) endekslerini cekip ekle
+            try:
+                from app.sources.isyatirim import fetch_detail
+                for extra_code, name in [("XU030", "BIST 30"), ("XBANK", "BIST Banka")]:
+                    detail = fetch_detail(extra_code)
+                    if detail and detail.get("last"):
+                        last_price = detail["last"]
+                        day_close = detail.get("day_close") or last_price
+                        diff_price = last_price - day_close
+                        diff_percent = (diff_price / day_close * 100) if day_close > 0 else 0.0
+                        
+                        data.append({
+                            "code": extra_code,
+                            "name": name,
+                            "label": name,
+                            "category": "index",
+                            "last_price": last_price,
+                            "diff_price": diff_price,
+                            "diff_percent": diff_percent,
+                            "display_order": 90,
+                            "source": "isyatirim",
+                        })
+            except Exception as ex:
+                logger.error("[%s] Ek endeksler yuklenirken hata olustu: %s", self.name, ex)
+
             return SourceResult(
                 success=True,
                 data=data,

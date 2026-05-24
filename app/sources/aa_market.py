@@ -3,41 +3,6 @@ Anadolu Ajansı Finans — Piyasa özeti (navbar ticker verisi).
 Sağladığı veri: market_summary
 
 Brent, Altın, USD/TRY, EUR/TRY, BIST 100/500, Bitcoin, Dolar Endeksi vb.
-
-Response yapısı:
-{
-  "UstBarSembolListesi": [
-    {
-      "SymbolId": 26,
-      "Symbol": "USDTRY",
-      "Name": "Dolar/TL",
-      "LastPrice": 45.157,
-      "DiffDayPer": -0.01,
-      "DiffLastPrice": 0,
-      "Kolon": 4,
-      "Sira": 2,
-      "OnyuzTanim": "USD/TRY",   ← görünen etiket
-      "SembolVeriTipi": 4,
-      "type": 1
-    }
-  ]
-}
-
-type değerleri (gözlemlenen):
-  0 → Endeks / Kripto / VIOP
-  1 → Forex
-  3 → Endeks (BIST Repo)
-  4 → Emtia / Forex
-  5 → Kripto
-  8 → Emtia (Brent)
-  9 → Altın TL
-  11 → Dolar Endeksi
-
-SembolVeriTipi:
-  2 → VIOP
-  3 → Endeks
-  4 → Forex / Emtia
-  5 → Kripto
 """
 import logging
 from datetime import datetime, timezone
@@ -122,7 +87,143 @@ class AAMarketSummarySource(BaseSource):
         "X-Requested-With": "XMLHttpRequest",
     }
 
+    def _fetch_custom_summary(self) -> list:
+        data = []
+        
+        # 1. Is Yatirim'dan endeksleri, emtialari ve altini cek
+        try:
+            from app.sources.isyatirim import fetch_detail
+            index_codes = [
+                ("XU100", "BIST 100", "BIST 100"),
+                ("XU030", "BIST 30", "BIST 30"),
+                ("XU500", "BIST 500", "BIST 500"),
+                ("XBANK", "BIST Banka", "BIST Banka"),
+                ("BRENT", "Brent Petrol", "BRENT PETROL $"),
+                ("GLDGR", "Gram Altın TL", "ALTIN TL/GR")
+            ]
+            for extra_code, name, label in index_codes:
+                detail = fetch_detail(extra_code)
+                if detail and detail.get("last"):
+                    last_price = detail["last"]
+                    day_close = detail.get("day_close") or last_price
+                    diff_price = last_price - day_close
+                    diff_percent = (diff_price / day_close * 100) if day_close > 0 else 0.0
+                    
+                    code = "XGLD" if extra_code == "GLDGR" else extra_code
+                    category = "gold" if extra_code == "GLDGR" else ("commodity" if extra_code == "BRENT" else "index")
+                    
+                    data.append({
+                        "code": code,
+                        "name": name,
+                        "label": label,
+                        "category": category,
+                        "last_price": last_price,
+                        "diff_price": diff_price,
+                        "diff_percent": diff_percent,
+                        "display_order": len(data) + 1,
+                        "source": "isyatirim",
+                    })
+        except Exception as e:
+            logger.error("[custom_summary] Is Yatirim fetch error: %s", e)
+
+        # 2. Frankfurter'dan doviz kurlarini cek
+        try:
+            import httpx
+            url = "https://api.frankfurter.app/latest?to=USD,TRY"
+            with httpx.Client(timeout=10) as client:
+                resp = client.get(url)
+                if resp.ok:
+                    f_data = resp.json()
+                    rates = f_data.get("rates", {})
+                    usd = rates.get("USD")
+                    try_rate = rates.get("TRY")
+                    if usd and try_rate:
+                        usdtry = try_rate / usd
+                        
+                        # USDTRY
+                        data.append({
+                            "code": "USDTRY",
+                            "name": "Dolar/TL",
+                            "label": "USD/TRY",
+                            "category": "forex",
+                            "last_price": round(usdtry, 4),
+                            "diff_price": 0.0,
+                            "diff_percent": 0.0,
+                            "display_order": len(data) + 1,
+                            "source": "frankfurter",
+                        })
+                        
+                        # EURTRY
+                        data.append({
+                            "code": "EURTRY",
+                            "name": "FX Euro/Turkish Lira",
+                            "label": "EUR/TRY",
+                            "category": "forex",
+                            "last_price": try_rate,
+                            "diff_price": 0.0,
+                            "diff_percent": 0.0,
+                            "display_order": len(data) + 1,
+                            "source": "frankfurter",
+                        })
+                        
+                        # EURUSD
+                        data.append({
+                            "code": "EURUSD",
+                            "name": "FX USD/EURO",
+                            "label": "EUR/USD",
+                            "category": "forex",
+                            "last_price": usd,
+                            "diff_price": 0.0,
+                            "diff_percent": 0.0,
+                            "display_order": len(data) + 1,
+                            "source": "frankfurter",
+                        })
+        except Exception as e:
+            logger.error("[custom_summary] Frankfurter fetch error: %s", e)
+
+        # 3. Binance'ten Bitcoin cek
+        try:
+            import httpx
+            url = "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"
+            with httpx.Client(timeout=10) as client:
+                resp = client.get(url)
+                if resp.ok:
+                    b_data = resp.json()
+                    last_price = float(b_data.get("lastPrice", 0))
+                    pct_change = float(b_data.get("priceChangePercent", 0))
+                    price_change = float(b_data.get("priceChange", 0))
+                    
+                    data.append({
+                        "code": "BTCUSDT",
+                        "name": "BTC_USDT",
+                        "label": "BITCOIN/USD",
+                        "category": "crypto",
+                        "last_price": last_price,
+                        "diff_price": price_change,
+                        "diff_percent": pct_change,
+                        "display_order": len(data) + 1,
+                        "source": "binance",
+                    })
+        except Exception as e:
+            logger.error("[custom_summary] Binance fetch error: %s", e)
+
+        return data
+
     def fetch(self) -> SourceResult:
+        # Oncelikle cok daha guvenilir ve canli olan Is Yatirim + Frankfurter + Binance summary generatorunu dene
+        try:
+            custom_data = self._fetch_custom_summary()
+            if len(custom_data) >= 5:
+                logger.info("[%s] Market summary is custom generated successfully. %d items.", self.name, len(custom_data))
+                return SourceResult(
+                    success=True,
+                    data=custom_data,
+                    fetched_at=datetime.now(timezone.utc),
+                )
+        except Exception as ex:
+            logger.error("[%s] Custom summary generation failed, falling back to AA: %s", self.name, ex)
+
+        # Fallback: Eski AA Finans crawler mekanizmasi
         try:
             with httpx.Client(
                 timeout=settings.HTTP_TIMEOUT_SECONDS,
@@ -142,31 +243,6 @@ class AAMarketSummarySource(BaseSource):
             # Kolon/Sira sırasına göre sırala (navbar'daki görünüm sırası)
             items_sorted = sorted(items, key=lambda x: (x.get("Kolon", 99), x.get("Sira", 99)))
             data = [self._normalize(item) for item in items_sorted]
-
-            # Is Yatirim'dan gercek zamanli BIST 30 (XU030) ve BIST Banka (XBANK) endekslerini cekip ekle
-            try:
-                from app.sources.isyatirim import fetch_detail
-                for extra_code, name in [("XU030", "BIST 30"), ("XBANK", "BIST Banka")]:
-                    detail = fetch_detail(extra_code)
-                    if detail and detail.get("last"):
-                        last_price = detail["last"]
-                        day_close = detail.get("day_close") or last_price
-                        diff_price = last_price - day_close
-                        diff_percent = (diff_price / day_close * 100) if day_close > 0 else 0.0
-                        
-                        data.append({
-                            "code": extra_code,
-                            "name": name,
-                            "label": name,
-                            "category": "index",
-                            "last_price": last_price,
-                            "diff_price": diff_price,
-                            "diff_percent": diff_percent,
-                            "display_order": 90,
-                            "source": "isyatirim",
-                        })
-            except Exception as ex:
-                logger.error("[%s] Ek endeksler yuklenirken hata olustu: %s", self.name, ex)
 
             return SourceResult(
                 success=True,

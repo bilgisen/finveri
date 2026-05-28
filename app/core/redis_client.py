@@ -23,6 +23,7 @@ def get_redis() -> redis.Redis:
         _client = redis.from_url(
             url,
             decode_responses=True,
+            ssl_cert_reqs=None,
             socket_timeout=10.0,
             socket_connect_timeout=10.0,
         )

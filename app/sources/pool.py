@@ -109,7 +109,7 @@ class DataPool:
         pipe = r.pipeline()
         pipe.set(_KEY_DATA.format(data_type=data_type), json.dumps(clean_data), ex=ttl)
         pipe.set(_KEY_LAST_UPDATED.format(data_type=data_type), now, ex=ttl)
-        pipe.execute()
+        pipe.exec()
 
     def _update_source_status(self, source_name: str, data_type: str, result: SourceResult):
         """Kaynak durumunu Redis'e yazar (monitoring için)."""

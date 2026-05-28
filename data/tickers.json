@@ -108,5 +108,33 @@
     "sector": "Ulaştırma",
     "market": "BIST",
     "aliases": {}
+  },
+  "XU100": {
+    "code": "XU100",
+    "name": "BIST 100 Endeksi",
+    "sector": "Endeks",
+    "market": "BIST_INDEX",
+    "aliases": {}
+  },
+  "XU030": {
+    "code": "XU030",
+    "name": "BIST 30 Endeksi",
+    "sector": "Endeks",
+    "market": "BIST_INDEX",
+    "aliases": {}
+  },
+  "XBANK": {
+    "code": "XBANK",
+    "name": "BIST Banka Endeksi",
+    "sector": "Endeks",
+    "market": "BIST_INDEX",
+    "aliases": {}
+  },
+  "XUSIN": {
+    "code": "XUSIN",
+    "name": "BIST Sınai Endeksi",
+    "sector": "Endeks",
+    "market": "BIST_INDEX",
+    "aliases": {}
   }
 }

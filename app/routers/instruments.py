@@ -1,7 +1,11 @@
 import json
 from typing import List, Optional
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import select
+from app.core.db import AsyncSessionLocal
+from app.models.history import DailyPrice
 
 from app.core.redis_client import get_redis
 from app.core.ticker_store import get_ticker, get_all_tickers
@@ -187,6 +191,58 @@ def get_stock_detail(code: str):
     return StockDetail(**result)
 
 
+@router.get("/stocks/{code}/header-summary", tags=["analysis"])
+async def get_stock_header_summary(code: str):
+    """Şirket veya endeks detay sayfası için dinamik 2-3 paragraflık analiz metnini döner."""
+    from app.services.summary_generator import generate_header_summary
+    result = await generate_header_summary(code)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.get("/stocks/{code}/summary-card", tags=["analysis"])
+async def get_stock_summary_card(code: str):
+    """UI dashboard kartları ve grid'ler için optimize edilmiş kompakt özet verileri döner."""
+    from app.services.ta_engine import generate_llm_summary
+    result = await generate_llm_summary(code)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+        
+    ticker_upper = code.upper()
+    live_price = result.get("close", 0.0)
+    
+    data, _ = _read_cache("bist_stocks")
+    diff_percent = 0.0
+    diff_price = 0.0
+    display_name = ticker_upper
+    
+    if data:
+        match = next((item for item in data if item.get("code", "").upper() == ticker_upper), None)
+        if match:
+            diff_percent = match.get("diff_percent", 0.0)
+            diff_price = match.get("diff_price", 0.0)
+            display_name = match.get("display_name") or match.get("name") or ticker_upper
+
+    return {
+        "ticker": ticker_upper,
+        "display_name": display_name,
+        "last_price": live_price,
+        "diff_price": diff_price,
+        "diff_percent": diff_percent,
+        "trend": result.get("trend", "Nötr"),
+        "rsi": result.get("rsi", {}).get("value", 50.0),
+        "rsi_status": result.get("rsi", {}).get("status", "Nötr"),
+        "macd_status": result.get("macd", "Nötr"),
+        "support": result.get("support_resistance", {}).get("support", 0.0),
+        "resistance": result.get("support_resistance", {}).get("resistance", 0.0),
+        "stop_loss": result.get("atr_stop_loss", 0.0),
+        "sma_20": result.get("sma", {}).get("sma_20"),
+        "sma_50": result.get("sma", {}).get("sma_50"),
+        "sma_200": result.get("sma", {}).get("sma_200"),
+    }
+
+
 @router.get("/market-summary", response_model=MarketSummaryResponse, tags=["market"])
 def get_market_summary(
     category: Optional[str] = Query(None, description="Kategori filtresi: forex, index, commodity, crypto, gold, repo, viop"),
@@ -211,6 +267,38 @@ def get_market_summary(
         last_updated=last_updated,
         data=[MarketSummaryItem(**{k: v for k, v in i.items() if k in MarketSummaryItem.__fields__}) for i in data],
     )
+
+
+@router.get("/indices", tags=["indices"])
+def get_indices():
+    """Bilinen BIST endeks listesini fiyat verileriyle döner."""
+    from app.core.index_store import get_all_indices
+    indices = get_all_indices()
+    
+    data, last_updated = _read_cache("market_summary")
+    
+    result = []
+    for code, info in indices.items():
+        price_info = {}
+        if data:
+            match = next((item for item in data if item.get("code", "").upper() == code), None)
+            if match:
+                price_info = {
+                    "last_price": match.get("last_price"),
+                    "diff_percent": match.get("diff_percent"),
+                    "volume": match.get("volume", 0.0),
+                }
+        
+        result.append({
+            **info,
+            **price_info
+        })
+        
+    return {
+        "success": True,
+        "last_updated": last_updated,
+        "data": result
+    }
 
 
 @router.get("/tickers", tags=["tickers"])
@@ -241,3 +329,36 @@ def get_instrument_by_code(code: str):
             return Instrument(**{k: v for k, v in item.items() if k in Instrument.__fields__})
 
     raise HTTPException(status_code=404, detail=f"'{code}' kodu bulunamadı.")
+
+
+@router.get("/{code}/history")
+async def get_instrument_history(code: str, limit: int = Query(500, le=1000)):
+    """Belirli bir enstrümanın geçmiş OHLCV mum verilerini döner."""
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            select(DailyPrice)
+            .where(DailyPrice.ticker == code.upper())
+            .order_by(DailyPrice.date.asc())
+            .limit(limit)
+        )
+        res = await session.execute(stmt)
+        prices = res.scalars().all()
+        
+        if not prices:
+            raise HTTPException(status_code=404, detail=f"'{code}' için geçmiş veri bulunamadı.")
+            
+        return {
+            "success": True,
+            "ticker": code.upper(),
+            "data": [
+                {
+                    "time": int(datetime.combine(p.date, datetime.min.time()).replace(tzinfo=timezone.utc).timestamp() * 1000),
+                    "open": p.open,
+                    "high": p.high,
+                    "low": p.low,
+                    "close": p.close,
+                    "volume": p.volume,
+                }
+                for p in prices
+            ]
+        }

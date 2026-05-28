@@ -22,7 +22,7 @@ class StockQuote(BaseModel):
     low_price: Optional[float] = None
     diff_price: Optional[float] = None
     diff_percent: Optional[float] = None
-    volume: Optional[int] = None
+    volume: Optional[float] = None
     record_date: Optional[str] = None
     source: Optional[str] = None
 

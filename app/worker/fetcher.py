@@ -77,7 +77,7 @@ def fetch_and_cache() -> bool:
         for inst in instruments:
             pipe.set(KEY_BY_CODE.format(code=inst["code"]), json.dumps(inst), ex=ttl)
 
-        pipe.execute()
+        pipe.exec()
 
         logger.info(
             "Cache güncellendi. Toplam: %d enstrüman, %d tip.",

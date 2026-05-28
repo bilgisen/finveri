@@ -1,0 +1,42 @@
+{
+  "XU100": {
+    "code": "XU100",
+    "name": "BIST 100 Endeksi",
+    "category": "BIST",
+    "tradingview_symbol": "XU100",
+    "yfinance_symbol": "^XU100",
+    "description": "Borsa İstanbul'un ana endeksidir, en işlem gören 100 şirketi kapsar."
+  },
+  "XU030": {
+    "code": "XU030",
+    "name": "BIST 30 Endeksi",
+    "category": "BIST",
+    "tradingview_symbol": "XU030",
+    "yfinance_symbol": "^XU030",
+    "description": "Borsa İstanbul'daki en yüksek piyasa değerine sahip ve en likit 30 şirketi temsil eder."
+  },
+  "XBANK": {
+    "code": "XBANK",
+    "name": "BIST Bankacılık Endeksi",
+    "category": "SEKTOR",
+    "tradingview_symbol": "XBANK",
+    "yfinance_symbol": "^XBANK",
+    "description": "Borsa İstanbul'da işlem gören bankaların hisselerinden oluşur."
+  },
+  "XUSIN": {
+    "code": "XUSIN",
+    "name": "BIST Sınai Endeksi",
+    "category": "SEKTOR",
+    "tradingview_symbol": "XUSIN",
+    "yfinance_symbol": "^XUSIN",
+    "description": "Borsa İstanbul'da işlem gören sanayi sektöründeki dev şirketleri temsil eder."
+  },
+  "XU500": {
+    "code": "XU500",
+    "name": "BIST 500 Endeksi",
+    "category": "BIST",
+    "tradingview_symbol": "XU500",
+    "yfinance_symbol": "^XU500",
+    "description": "Borsa İstanbul'da işlem gören 500 şirketi kapsayan geniş ölçekli endekstir."
+  }
+}

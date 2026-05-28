@@ -45,7 +45,7 @@ def load_tickers() -> int:
     pipe.set(KEY_ALL_TICKERS, json.dumps(tickers))
     pipe.set(KEY_TICKER_CODES, json.dumps(list(tickers.keys())))
 
-    pipe.execute()
+    pipe.exec()
     logger.info("%d ticker Redis'e yüklendi.", len(tickers))
     return len(tickers)
 

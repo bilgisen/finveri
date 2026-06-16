@@ -1,0 +1,20 @@
+# FastAPI Cloud Deployment Configuration
+
+# Files and directories to ignore during deployment
+ignore:
+  - ".git"
+  - ".venv"
+  - "__pycache__"
+  - "*.pyc"
+  - "*.log"
+  - ".env"
+  - ".env.example"
+  - "scratch/"
+  - "test_*.py"
+  - "create_db.py"
+  - "migrate_to_postgres.py"
+  - "read_transcript.py"
+  - "clear_cache.py"
+  - "README.md"
+  - "uv.lock"  # Build process handles dependencies, usually lock is not uploaded if uvx is used but safe to include or exclude based on preference. UV prefers it, but cloud build might re-resolve. Actually, for reproducible builds, keeping it might be better, but the docs mention uvx handles it.
+  - "finveri.db" # Local SQLite database

@@ -207,10 +207,38 @@ async def fetch_historical_with_fallback(session, ticker: str, info: dict):
         logger.error(f"Failed to save records for {ticker} to DB: {e}")
 
 
+async def batch_calculate_all_ta():
+    """Calculates TA for all tickers and caches results in Redis."""
+    from app.services.ta_engine import generate_llm_summary
+    from app.core.redis_client import get_redis
+    import json
+    
+    tickers = get_all_tickers()
+    r = get_redis()
+    
+    logger.info(f"Starting batch TA calculation for {len(tickers)} tickers...")
+    
+    success_count = 0
+    for code in tickers.keys():
+        try:
+            # This will calculate and return the full TA result
+            result = await generate_llm_summary(code)
+            if "error" not in result:
+                # Cache for 24 hours (86400 seconds)
+                cache_key = f"ta_data:{code}"
+                r.setex(cache_key, 86400, json.dumps(result))
+                success_count += 1
+            
+            # Small delay to prevent CPU/IO spikes
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Batch TA failed for {code}: {e}")
+            
+    logger.info(f"Batch TA calculation completed. Successfully cached {success_count}/{len(tickers)} tickers.")
+
 async def sync_all_history():
     """Sync historical OHLCV data for all supported tickers."""
     from app.core.ticker_store import load_tickers
-    from app.core.redis_client import get_redis
     load_tickers() # Load from JSON to Redis first
     
     tickers = get_all_tickers()
@@ -220,15 +248,8 @@ async def sync_all_history():
             await fetch_historical_with_fallback(session, code, info)
             await asyncio.sleep(1) # Small delay to avoid rate limits
             
-    # Clear all TA caches to force recalculation with new data
-    try:
-        r = get_redis()
-        keys = r.keys("ta_summary:*")
-        if keys:
-            r.delete(*keys)
-            logger.info(f"Cleared {len(keys)} TA summary caches.")
-    except Exception as e:
-        logger.error(f"Failed to clear Redis TA caches: {e}")
+    # Run batch TA calculation after history sync
+    await batch_calculate_all_ta()
 
 if __name__ == "__main__":
     import logging

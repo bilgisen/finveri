@@ -8,18 +8,34 @@ router = APIRouter(prefix="/api/v1/ta", tags=["Technical Analysis"])
 @router.get("/{ticker}")
 async def get_technical_analysis(
     ticker: str, 
-    indicators: List[str] = Query(default=["rsi", "macd", "sma_20", "sma_50"], description="List of indicators to calculate")
+    indicators: List[str] = Query(default=["rsi", "macd", "sma_20", "sma_50", "supertrend", "bbands"], description="List of indicators to calculate")
 ):
     """
     Returns calculated technical indicators for the requested ticker.
-    Uses historical daily close prices to compute indicators on the fly.
+    Uses Redis cache if available, otherwise calculates on the fly.
     """
-    ticker_upper = ticker.upper()
-    tickers = get_all_tickers()
+    from app.core.redis_client import get_redis
+    import json
     
-    if ticker_upper not in tickers:
-        raise HTTPException(status_code=404, detail=f"Ticker {ticker_upper} not found in supported list.")
-        
+    ticker_upper = ticker.upper()
+    r = get_redis()
+    cache_key = f"ta_data:{ticker_upper}"
+    
+    # Try to get from batch cache first
+    try:
+        cached = r.get(cache_key)
+        if cached:
+            full_data = json.loads(cached)
+            # Filter indicators if needed, but for now return all common ones
+            return {
+                "ticker": ticker_upper,
+                "indicators": full_data,
+                "source": "cache"
+            }
+    except Exception as e:
+        logger.warning(f"Redis read failed for {ticker_upper}: {e}")
+
+    # Fallback to on-the-fly
     result = await calculate_indicators(ticker_upper, indicators)
     
     if "error" in result:
@@ -27,35 +43,30 @@ async def get_technical_analysis(
         
     return {
         "ticker": ticker_upper,
-        "indicators": result
+        "indicators": result,
+        "source": "live"
     }
 
 @router.get("/summary/{ticker}")
 async def get_ta_summary(ticker: str):
     """
     Returns an LLM-friendly summary of the current Technical Analysis status.
-    Suitable for direct injection into Chatbot prompts.
-    Uses Redis caching to support Ultimate Level high-traffic volume.
+    Uses Redis caching to support high-traffic volume.
     """
     from app.services.ta_engine import generate_llm_summary
     from app.core.redis_client import get_redis
     import json
     
     ticker_upper = ticker.upper()
-    tickers = get_all_tickers()
-    
-    if ticker_upper not in tickers:
-        raise HTTPException(status_code=404, detail=f"Ticker {ticker_upper} not found in supported list.")
-        
-    redis_client = get_redis()
-    cache_key = f"ta_summary:{ticker_upper}"
+    r = get_redis()
+    cache_key = f"ta_data:{ticker_upper}"
     
     try:
-        cached = redis_client.get(cache_key)
+        cached = r.get(cache_key)
         if cached:
             return json.loads(cached)
     except Exception as e:
-        logger.warning(f"Redis cache read failed for TA summary: {e}")
+        logger.warning(f"Redis read failed for {ticker_upper}: {e}")
         
     result = await generate_llm_summary(ticker_upper)
     
@@ -63,9 +74,9 @@ async def get_ta_summary(ticker: str):
         raise HTTPException(status_code=400, detail=result["error"])
         
     try:
-        # Cache for 1 hour (3600 seconds)
-        redis_client.setex(cache_key, 3600, json.dumps(result))
+        # Cache for 24 hours
+        r.setex(cache_key, 86400, json.dumps(result))
     except Exception as e:
-        logger.warning(f"Redis cache write failed for TA summary: {e}")
+        logger.warning(f"Redis write failed for {ticker_upper}: {e}")
         
     return result

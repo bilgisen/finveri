@@ -6,21 +6,26 @@ from typing import Dict, Any
 
 from app.core.db import AsyncSessionLocal
 from app.models.history import DailyPrice
+from app.services.advanced_ta import (
+    calculate_volume_profile,
+    detect_market_regime,
+    detect_liquidity_voids,
+    calculate_support_resistance_zones,
+    enhanced_technical_score
+)
 
 logger = logging.getLogger(__name__)
 
-async def get_historical_dataframe(ticker: str, limit: int = 500) -> pd.DataFrame:
+async def get_historical_dataframe(ticker: str, limit: int = 500, interval: str = "1d") -> pd.DataFrame:
     """
-    Fetches daily price history from DB and overlays the latest real-time quote
-    from Redis cache (bist_stocks or market_summary) as a temporary final bar
-    to support "Real-time Indicator Overlay".
+    Fetches price history from DB. If interval is 1d, applies real-time overlay.
     """
     import json
     from datetime import datetime
     from app.core.redis_client import get_redis
 
     async with AsyncSessionLocal() as session:
-        # Get latest records for ticker from PostgreSQL
+        # Get latest records for ticker from DB
         stmt = select(DailyPrice).where(DailyPrice.ticker == ticker).order_by(DailyPrice.date.desc()).limit(limit)
         result = await session.execute(stmt)
         records = result.scalars().all()
@@ -40,57 +45,78 @@ async def get_historical_dataframe(ticker: str, limit: int = 500) -> pd.DataFram
         } for r in records])
 
         df.set_index("date", inplace=True)
+        df.index = pd.to_datetime(df.index)
 
-        # --- REAL-TIME INDICATOR OVERLAY LAYER ---
-        try:
-            r_client = get_redis()
-            live_data = None
-            is_stock = True
+        # Resample for weekly if requested
+        if interval == "1w":
+            df = df.resample('W-FRI').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            })
+            return df.tail(limit)
 
-            # 1. Try to find the ticker in BIST Stocks (AA source)
-            stocks_raw = r_client.get("pool:bist_stocks:data")
-            if stocks_raw:
-                stocks = json.loads(stocks_raw)
-                live_data = next((item for item in stocks if item.get("code", "").upper() == ticker), None)
+        # --- REAL-TIME INDICATOR OVERLAY LAYER (1D only) ---
+        if interval == "1d":
+            try:
+                r_client = get_redis()
+                live_data = None
+                is_stock = True
 
-            # 2. Try to find the ticker in Market Summary (Forex, Endeks, Commodity vb.)
-            if not live_data:
-                summary_raw = r_client.get("pool:market_summary:data")
-                if summary_raw:
-                    summary = json.loads(summary_raw)
-                    live_data = next((item for item in summary if item.get("code", "").upper() == ticker), None)
-                    is_stock = False
+                stocks_raw = r_client.get("pool:bist_stocks:data")
+                if stocks_raw:
+                    stocks = json.loads(stocks_raw)
+                    live_data = next((item for item in stocks if item.get("code", "").upper() == ticker), None)
 
-            if live_data:
-                # Extract pricing from the live cached item
-                live_close = live_data.get("last_price")
-                
-                if live_close is not None and live_close > 0:
-                    if is_stock:
-                        live_open = live_data.get("first_price") or df.iloc[-1]["close"] if not df.empty else live_close
-                        live_high = live_data.get("high_price") or live_close
-                        live_low = live_data.get("low_price") or live_close
-                        live_vol = float(live_data.get("volume") or 0.0)
-                    else:
-                        # For indices/commodities where high/low/open might not be in summary
-                        live_open = live_close
-                        live_high = live_close
-                        live_low = live_close
-                        live_vol = 0.0
+                if not live_data:
+                    summary_raw = r_client.get("pool:market_summary:data")
+                    if summary_raw:
+                        summary = json.loads(summary_raw)
+                        live_data = next((item for item in summary if item.get("code", "").upper() == ticker), None)
+                        is_stock = False
 
-                    today_date = datetime.now().date()
-                    
-                    # If the last row in DB is already for today, overwrite it with latest live data
-                    if not df.empty and df.index[-1] == today_date:
-                        df.loc[today_date] = [live_open, live_high, live_low, live_close, live_vol]
-                    else:
-                        # Otherwise append today as a new temporary 501st row
-                        df.loc[today_date] = [live_open, live_high, live_low, live_close, live_vol]
+                if live_data:
+                    live_close = live_data.get("last_price")
+                    if live_close is not None and live_close > 0:
+                        if is_stock:
+                            live_open = live_data.get("first_price") or df.iloc[-1]["close"] if not df.empty else live_close
+                            live_high = live_data.get("high_price") or live_close
+                            live_low = live_data.get("low_price") or live_close
+                            live_vol = float(live_data.get("volume") or 0.0)
+                        else:
+                            live_open = live_close
+                            live_high = live_close
+                            live_low = live_close
+                            live_vol = 0.0
 
-        except Exception as overlay_err:
-            logger.warning(f"Failed to apply Real-time Indicator Overlay for {ticker}: {overlay_err}")
+                        today_date = pd.Timestamp(datetime.now().date())
+                        if not df.empty and df.index[-1] == today_date:
+                            df.loc[today_date] = [live_open, live_high, live_low, live_close, live_vol]
+                        else:
+                            df.loc[today_date] = [live_open, live_high, live_low, live_close, live_vol]
+
+            except Exception as overlay_err:
+                logger.warning(f"Failed to apply Real-time Indicator Overlay for {ticker}: {overlay_err}")
 
         return df
+
+async def get_mtf_analysis(ticker: str) -> Dict[str, str]:
+    """
+    Performs Weekly trend analysis to provide context for daily signals.
+    """
+    df_w = await get_historical_dataframe(ticker, limit=100, interval="1w")
+    if df_w.empty or len(df_w) < 20:
+        return {"weekly_trend": "Unknown"}
+        
+    df_w.ta.sma(length=20, append=True)
+    last_w = df_w.iloc[-1].to_dict()
+    close_w = last_w.get("close", 0)
+    sma_20_w = last_w.get("SMA_20", 0)
+    
+    trend = "Bullish" if close_w > sma_20_w else "Bearish"
+    return {"weekly_trend": trend}
 
 async def calculate_indicators(ticker: str, indicators: list[str]) -> Dict[str, Any]:
     """Calculates requested basic indicators for a given ticker."""
@@ -107,6 +133,22 @@ async def calculate_indicators(ticker: str, indicators: list[str]) -> Dict[str, 
                 df.ta.rsi(length=14, append=True)
             elif ind == "macd":
                 df.ta.macd(fast=12, slow=26, signal=9, append=True)
+            elif ind == "stoch":
+                df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
+            elif ind == "bbands":
+                df.ta.bbands(length=20, std=2, append=True)
+            elif ind == "supertrend":
+                df.ta.supertrend(period=7, multiplier=3, append=True)
+            elif ind == "obv":
+                df.ta.obv(append=True)
+            elif ind == "mfi":
+                df.ta.mfi(length=14, append=True)
+            elif ind == "ichimoku":
+                df.ta.ichimoku(append=True)
+            elif ind == "psar":
+                df.ta.psar(append=True)
+            elif ind == "vwap":
+                df.ta.vwap(append=True)
             elif ind.startswith("sma_"):
                 period = int(ind.split("_")[1])
                 df.ta.sma(length=period, append=True)
@@ -131,6 +173,26 @@ async def calculate_indicators(ticker: str, indicators: list[str]) -> Dict[str, 
                         "signal": last_row[macds_col[0]],
                         "histogram": last_row[macdh_col[0]]
                     }
+            elif ind == "stoch":
+                k_col = [c for c in last_row.keys() if "STOCHk_" in c]
+                d_col = [c for c in last_row.keys() if "STOCHd_" in c]
+                if k_col and d_col:
+                    result["stoch"] = {"k": last_row[k_col[0]], "d": last_row[d_col[0]]}
+            elif ind == "bbands":
+                bbl_col = [c for c in last_row.keys() if "BBL_" in c]
+                bbu_col = [c for c in last_row.keys() if "BBU_" in c]
+                if bbl_col and bbu_col:
+                    result["bbands"] = {"lower": last_row[bbl_col[0]], "upper": last_row[bbu_col[0]]}
+            elif ind == "supertrend":
+                st_col = [c for c in last_row.keys() if "SUPERT_" in c]
+                if st_col:
+                    result["supertrend"] = last_row[st_col[0]]
+            elif ind == "obv":
+                obv_col = [c for c in last_row.keys() if "OBV" in c]
+                if obv_col: result["obv"] = last_row[obv_col[0]]
+            elif ind == "mfi":
+                mfi_col = [c for c in last_row.keys() if "MFI" in c]
+                if mfi_col: result["mfi"] = last_row[mfi_col[0]]
             elif ind.startswith("sma_"):
                 sma_col = [c for c in last_row.keys() if "SMA" in c]
                 if sma_col:
@@ -153,138 +215,275 @@ async def calculate_indicators(ticker: str, indicators: list[str]) -> Dict[str, 
 
     return result
 
+
+
+def detect_divergences(df: pd.DataFrame, column: str, window: int = 5) -> Dict[str, bool]:
+    """
+    Detects simple regular bullish and bearish divergences between price and an indicator.
+    """
+    if len(df) < window * 4:
+        return {"bullish": False, "bearish": False}
+
+    # Simplified divergence detection logic
+    # Find local peaks/troughs
+    df = df.copy()
+    df['price_high'] = df['high'].rolling(window=window, center=True).max()
+    df['price_low'] = df['low'].rolling(window=window, center=True).min()
+    df['ind_high'] = df[column].rolling(window=window, center=True).max()
+    df['ind_low'] = df[column].rolling(window=window, center=True).min()
+
+    # Get the last two significant peaks/troughs
+    # For a real implementation, we'd look for points where high == price_high
+    # But for a summary, we can look at the relative changes over the last N bars
+    
+    n_recent = 30
+    recent_df = df.tail(n_recent)
+    
+    # Bearish Divergence: Higher High in Price, Lower High in Indicator
+    price_peaks = recent_df[recent_df['high'] == recent_df['price_high']]
+    ind_peaks = recent_df[recent_df[column] == recent_df['ind_high']]
+    
+    bearish = False
+    if len(price_peaks) >= 2 and len(ind_peaks) >= 2:
+        p1, p2 = price_peaks.iloc[-2]['high'], price_peaks.iloc[-1]['high']
+        i1, i2 = ind_peaks.iloc[-2][column], ind_peaks.iloc[-1][column]
+        if p2 > p1 and i2 < i1:
+            bearish = True
+
+    # Bullish Divergence: Lower Low in Price, Higher Low in Indicator
+    price_troughs = recent_df[recent_df['low'] == recent_df['price_low']]
+    ind_troughs = recent_df[recent_df[column] == recent_df['ind_low']]
+    
+    bullish = False
+    if len(price_troughs) >= 2 and len(ind_troughs) >= 2:
+        t1, t2 = price_troughs.iloc[-2]['low'], price_troughs.iloc[-1]['low']
+        j1, j2 = ind_troughs.iloc[-2][column], ind_troughs.iloc[-1][column]
+        if t2 < t1 and j2 > j1:
+            bullish = True
+
+    return {"bullish": bullish, "bearish": bearish}
+
+async def get_market_breadth() -> Dict[str, Any]:
+    """Calculates what % of BIST100 stocks are above their SMA 50."""
+    from app.core.ticker_store import get_all_tickers
+    from app.core.redis_client import get_redis
+    import json
+    
+    # In a real scenario, we'd check cached TA data. 
+    # For now, let's look at the ta_data:* keys in Redis.
+    r = get_redis()
+    keys = r.keys("ta_data:*")
+    if not keys:
+        return {"breadth": 50, "status": "Neutral"}
+        
+    above_sma50 = 0
+    total = 0
+    for key in keys:
+        try:
+            data = json.loads(r.get(key))
+            if data.get("close", 0) > data.get("sma", {}).get("sma_50", 0):
+                above_sma50 += 1
+            total += 1
+        except: continue
+        
+    if total == 0: return {"breadth": 50, "status": "Neutral"}
+    percentage = (above_sma50 / total) * 100
+    status = "Strong" if percentage > 70 else "Weak" if percentage < 30 else "Neutral"
+    return {"breadth": percentage, "status": status}
+
+async def calculate_beta(ticker: str) -> float:
+    """Calculates 1-year Beta relative to XU100."""
+    df_stock = await get_historical_dataframe(ticker, limit=252)
+    df_market = await get_historical_dataframe("XU100", limit=252)
+    
+    if df_stock.empty or df_market.empty or len(df_stock) < 100:
+        return 1.0
+        
+    returns_stock = df_stock['close'].pct_change().dropna()
+    returns_market = df_market['close'].pct_change().dropna()
+    
+    # Align indices
+    common_idx = returns_stock.index.intersection(returns_market.index)
+    if len(common_idx) < 100: return 1.0
+    
+    s = returns_stock.loc[common_idx]
+    m = returns_market.loc[common_idx]
+    
+    covariance = s.cov(m)
+    variance = m.var()
+    
+    return round(covariance / variance, 2) if variance > 0 else 1.0
+
 async def generate_llm_summary(ticker: str) -> Dict[str, Any]:
-    """Generates an Ultimate-Level LLM-friendly summary of the current TA status."""
+    """Generates a Pro-Level Institutional-Grade TA summary with multi-layered context."""
     df = await get_historical_dataframe(ticker, limit=500)
     if df.empty:
         return {"error": "No historical data found"}
         
     try:
-        # 1. Base Indicators
+        # 1. Calculate ALL Indicators
         df.ta.rsi(length=14, append=True)
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
-        df.ta.sma(length=20, append=True)
-        df.ta.sma(length=50, append=True)
-        df.ta.sma(length=200, append=True)
+        df.ta.sma(length=20, append=True); df.ta.sma(length=50, append=True); df.ta.sma(length=200, append=True)
+        df.ta.ema(length=9, append=True); df.ta.ema(length=21, append=True)
         df.ta.bbands(length=20, std=2, append=True)
-        
-        # 2. Advanced Indicators (ADX & ATR)
         df.ta.adx(length=14, append=True)
         df.ta.atr(length=14, append=True)
+        df.ta.supertrend(period=7, multiplier=3, append=True)
+        df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
+        df.ta.mfi(length=14, append=True)
+        df.ta.ichimoku(append=True)
+        df.ta.psar(append=True)
+        df.ta.vwap(append=True)
+        df.ta.obv(append=True)
         
-        # 3. Candlestick Patterns (Custom Pandas Logic to avoid TA-Lib dependency)
-        df['body'] = df['close'] - df['open']
-        df['prev_body'] = df['body'].shift(1)
-        df['prev_close'] = df['close'].shift(1)
-        df['prev_open'] = df['open'].shift(1)
+        # 2. ADVANCED ANALYSIS LAYER
+        # Market Regime Detection (CRITICAL for chatbot context)
+        regime = detect_market_regime(df)
         
-        # Bullish Engulfing
-        df['bullish_engulfing'] = (df['prev_body'] < 0) & (df['body'] > 0) & (df['close'] >= df['prev_open']) & (df['open'] <= df['prev_close'])
-        # Bearish Engulfing
-        df['bearish_engulfing'] = (df['prev_body'] > 0) & (df['body'] < 0) & (df['close'] <= df['prev_open']) & (df['open'] >= df['prev_close'])
-        # Doji (Body is less than 5% of the high-low range)
-        df['range'] = df['high'] - df['low']
-        df['doji'] = abs(df['body']) <= (df['range'] * 0.05)
-
+        # Volume Profile Analysis (Institutional support/resistance)
+        volume_profile = calculate_volume_profile(df.tail(100))
+        
+        # Liquidity Voids (Fair Value Gaps)
+        liquidity_voids = detect_liquidity_voids(df)
+        
+        # Enhanced Support/Resistance Zones
+        sr_zones = calculate_support_resistance_zones(df)
+        
+        # Enhanced Technical Score (regime-aware)
+        score_data = enhanced_technical_score(df, regime)
+        
+        # Multi-Timeframe Context
+        mtf = await get_mtf_analysis(ticker)
+        
+        # Market Breadth & Beta
+        breadth = await get_market_breadth()
+        beta = await calculate_beta(ticker)
+        
         last_row = df.iloc[-1].to_dict()
-        prev_row = df.iloc[-2].to_dict() if len(df) > 1 else last_row
-
         close = last_row.get('close', 0)
         
-        # --- TREND ANALYSIS (SMA + ADX) ---
-        sma_50 = last_row.get('SMA_50', 0)
-        sma_200 = last_row.get('SMA_200', 0)
-        adx_keys = [k for k in last_row.keys() if 'ADX_' in k]
-        adx_val = last_row[adx_keys[0]] if adx_keys else 0
+        # Divergences
+        rsi_col = [c for c in last_row.keys() if 'RSI' in c]
+        rsi_div = detect_divergences(df, rsi_col[0]) if rsi_col else {"bullish": False, "bearish": False}
+        macd_val_col = [c for c in last_row.keys() if 'MACD_' in c and 's' not in c and 'h' not in c]
+        macd_div = detect_divergences(df, macd_val_col[0]) if macd_val_col[0] else {"bullish": False, "bearish": False}
         
-        trend = "Neutral"
-        if sma_50 > 0 and sma_200 > 0:
-            if close > sma_50 and close > sma_200:
-                trend = "Bullish"
-            elif close < sma_50 and close < sma_200:
-                trend = "Bearish"
-
-        trend_strength = "Weak/Ranging (Prone to fake signals)"
-        if adx_val > 25:
-            trend_strength = "Strong Trend"
-            trend = f"Strong {trend}" # E.g., Strong Bullish
-
-        # --- RSI ---
-        rsi_keys = [k for k in last_row.keys() if 'RSI' in k]
-        rsi_val = last_row[rsi_keys[0]] if rsi_keys else 50
-        rsi_status = "Neutral"
-        if rsi_val > 70: rsi_status = "Overbought (Correction Risk)"
-        elif rsi_val < 30: rsi_status = "Oversold (Rebound Potential)"
-
-        # --- MACD ---
-        macd_keys = [k for k in last_row.keys() if 'MACD_' in k]
-        macds_keys = [k for k in last_row.keys() if 'MACDs_' in k]
-        macd_val = last_row[macd_keys[0]] if macd_keys else 0
-        macds_val = last_row[macds_keys[0]] if macds_keys else 0
-        prev_macd = prev_row.get(macd_keys[0], 0) if macd_keys else 0
-        prev_macds = prev_row.get(macds_keys[0], 0) if macds_keys else 0
+        # 3. Risk/Reward Calculation with Enhanced SR Zones
+        atr_val = last_row.get('ATRr_14', 0)
         
-        macd_status = "Neutral"
-        if macd_val > macds_val and prev_macd <= prev_macds:
-            macd_status = "Bullish Crossover (Buy Signal)"
-        elif macd_val < macds_val and prev_macd >= prev_macds:
-            macd_status = "Bearish Crossover (Sell Signal)"
-        elif macd_val > macds_val:
-            macd_status = "Bullish Momentum"
-        elif macd_val < macds_val:
-            macd_status = "Bearish Momentum"
-
-        # --- STOP LOSS (ATR) ---
-        atr_keys = [k for k in last_row.keys() if 'ATRr_' in k]
-        atr_val = last_row[atr_keys[0]] if atr_keys else 0
-        # 1.5x ATR is a standard trailing stop
-        suggested_stop_loss = close - (1.5 * atr_val) if trend == "Bullish" or "Bullish" in trend else close + (1.5 * atr_val)
-
-        # --- CANDLESTICK PATTERNS ---
-        active_patterns = []
-        if last_row.get('bullish_engulfing'): active_patterns.append("Bullish Engulfing")
-        if last_row.get('bearish_engulfing'): active_patterns.append("Bearish Engulfing")
-        if last_row.get('doji'): active_patterns.append("Doji (Indecision)")
+        # Use enhanced support/resistance zones
+        nearest_support = sr_zones.get('nearest_support', {}).get('price', close * 0.95) if 'error' not in sr_zones else close * 0.95
+        nearest_resistance = sr_zones.get('nearest_resistance', {}).get('price', close * 1.05) if 'error' not in sr_zones else close * 1.05
         
-        pattern_str = ", ".join(active_patterns) if active_patterns else "No significant patterns detected yesterday."
+        trend = "Bullish" if score_data["score"] > 55 else "Bearish" if score_data["score"] < 45 else "Neutral"
+        
+        if trend == "Bullish":
+            stop_loss = max(close - (1.5 * atr_val), nearest_support)
+            take_profit = nearest_resistance
+        else:
+            stop_loss = min(close + (1.5 * atr_val), nearest_resistance)
+            take_profit = nearest_support
+            
+        rr_ratio = abs(take_profit - close) / abs(close - stop_loss) if abs(close - stop_loss) > 0 else 0
 
-        # --- SUPPORT/RESISTANCE (BBands) ---
-        bbl_keys = [k for k in last_row.keys() if 'BBL_' in k]
-        bbu_keys = [k for k in last_row.keys() if 'BBU_' in k]
-        support = last_row[bbl_keys[0]] if bbl_keys else 0
-        resistance = last_row[bbu_keys[0]] if bbu_keys else 0
-
-        # Construct LLM text
+        # 4. CHATBOT CONTEXT CONSTRUCTION
+        # Build rich, multi-layered context for chatbot
+        
+        # Key indicators summary
+        rsi_val = last_row.get([c for c in last_row.keys() if 'RSI' in c][0], 50) if [c for c in last_row.keys() if 'RSI' in c] else 50
+        macd_val = last_row.get([c for c in last_row.keys() if 'MACD_' in c and 's' not in c and 'h' not in c][0], 0) if [c for c in last_row.keys() if 'MACD_' in c and 's' not in c and 'h' not in c] else 0
+        
+        # Volume Profile context
+        vp_context = ""
+        if "error" not in volume_profile:
+            vp_context = (f"Volume POC (en yüksek hacim): {volume_profile['poc']:.2f} TL. "
+                         f"Value Area: {volume_profile['value_area_low']:.2f} - {volume_profile['value_area_high']:.2f} TL. ")
+        
+        # Liquidity voids context
+        lv_context = ""
+        if liquidity_voids:
+            recent_void = liquidity_voids[0]
+            lv_context = f"Yakın likidite boşluğu: {recent_void['gap_start']:.2f} - {recent_void['gap_end']:.2f} TL ({recent_void['direction']} yönlü). "
+        
+        # Enhanced LLM Prompt
         llm_text = (
-            f"Asset {ticker} is currently in a {trend} state. "
-            f"Trend strength (ADX) is {adx_val:.1f}, indicating a {trend_strength} market. "
-            f"RSI is {rsi_val:.1f} ({rsi_status}), and MACD shows {macd_status}. "
-            f"Candlestick Analysis: {pattern_str} "
-            f"Volatility (ATR) suggests a scientific stop-loss placement around {suggested_stop_loss:.2f}. "
-            f"Immediate support is near {support:.2f} and resistance near {resistance:.2f}."
+            f"=== {ticker} TEKNİK ANALİZ RAPORU ===\n\n"
+            f"📊 GENEL GÖRÜNÜM:\n"
+            f"Fiyat: {close:.2f} TL | Teknik Skor: {score_data['score']}/100 ({score_data['confidence']} güven)\n"
+            f"Trend: {trend} (Günlük), {mtf['weekly_trend']} (Haftalık)\n"
+            f"Piyasa Rejimi: {regime.get('regime', 'Unknown')} - {regime.get('trend_direction', 'Neutral')}\n"
+            f"Strateji Önerisi: {regime.get('recommended_strategy', 'N/A')}\n\n"
+            
+            f"📈 TEKNİK GÖSTERGELER:\n"
+            f"RSI(14): {rsi_val:.1f} | MACD: {macd_val:.2f}\n"
+            f"ADX: {regime.get('adx', 0):.1f} (Trend Gücü) | Volatilite: {regime.get('volatility_pct', 0):.2f}%\n"
+            f"VWAP: {'Fiyat üstünde' if close > last_row.get('VWAP_D', 0) else 'Fiyat altında'}\n\n"
+            
+            f"🎯 DESTEK VE DİRENÇ:\n"
+            f"Yakın Destek: {nearest_support:.2f} TL ({sr_zones.get('nearest_support', {}).get('type', 'N/A')})\n"
+            f"Yakın Direnç: {nearest_resistance:.2f} TL ({sr_zones.get('nearest_resistance', {}).get('type', 'N/A')})\n"
+            f"{vp_context}"
+            f"{lv_context}\n"
+            
+            f"💰 RİSK YÖNETİMİ:\n"
+            f"Stop-Loss: {stop_loss:.2f} TL | Hedef: {take_profit:.2f} TL\n"
+            f"Risk/Ödül Oranı: {rr_ratio:.2f}\n"
+            f"Beta (XU100): {beta} | Piyasa Genişliği: {breadth['breadth']:.1f}% ({breadth['status']})\n\n"
+            
+            f"⚡ AKTİF SİNYALLER:\n"
+            + "\n".join([f"• {sig}" for sig in score_data['signals'][:8]]) + "\n\n"
+            
+            f"🔍 SAPMA ANALİZİ:\n"
+            f"RSI: {'Bullish Divergence ✓' if rsi_div['bullish'] else 'Bearish Divergence ✗' if rsi_div['bearish'] else 'Yok'}\n"
+            f"MACD: {'Bullish Divergence ✓' if macd_div['bullish'] else 'Bearish Divergence ✗' if macd_div['bearish'] else 'Yok'}"
         )
 
         return {
             "ticker": ticker,
             "close": round(close, 2),
+            "date": df.index[-1].isoformat() if hasattr(df.index[-1], 'isoformat') else str(df.index[-1]),
+            
+            # Core metrics
+            "score": score_data["score"],
+            "confidence": score_data["confidence"],
             "trend": trend,
-            "adx_strength": trend_strength,
-            "rsi": {"value": round(rsi_val, 2), "status": rsi_status},
-            "macd": macd_status,
-            "sma": {
-                "sma_20": round(last_row.get('SMA_20', 0), 2) if last_row.get('SMA_20') else None,
-                "sma_50": round(last_row.get('SMA_50', 0), 2) if last_row.get('SMA_50') else None,
-                "sma_200": round(last_row.get('SMA_200', 0), 2) if last_row.get('SMA_200') else None,
+            "weekly_trend": mtf["weekly_trend"],
+            
+            # NEW: Market Regime
+            "market_regime": regime,
+            
+            # NEW: Volume Profile
+            "volume_profile": volume_profile,
+            
+            # NEW: Liquidity Voids
+            "liquidity_voids": liquidity_voids,
+            
+            # Enhanced Support/Resistance
+            "support_resistance_zones": sr_zones,
+            
+            # Risk metrics
+            "beta": beta,
+            "market_breadth": breadth,
+            "rr_ratio": round(rr_ratio, 2),
+            "stop_loss": round(stop_loss, 2),
+            "take_profit": round(take_profit, 2),
+            
+            # Signals & Divergences
+            "signals": score_data["signals"],
+            "divergences": {"rsi": rsi_div, "macd": macd_div},
+            
+            # Score components (for debugging)
+            "score_components": {
+                "trend": score_data.get("trend_component", 0),
+                "momentum": score_data.get("momentum_component", 0),
+                "volume": score_data.get("volume_component", 0)
             },
-            "candlestick_patterns": active_patterns,
-            "atr_stop_loss": round(suggested_stop_loss, 2),
-            "support_resistance": {
-                "support": round(support, 2),
-                "resistance": round(resistance, 2)
-            },
+            
+            # Chatbot-ready summary
             "llm_summary_prompt": llm_text
         }
 
     except Exception as e:
-        logger.error(f"LLM summary generation error for {ticker}: {e}")
+        logger.error(f"Ultimate TA error for {ticker}: {e}", exc_info=True)
         return {"error": str(e)}

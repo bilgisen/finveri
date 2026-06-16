@@ -6,7 +6,7 @@ from app.core.config import settings
 from app.core.redis_client import ping_redis
 from app.core.ticker_store import load_tickers
 from app.worker.scheduler import start_scheduler, stop_scheduler, get_pool
-from app.routers import instruments, ta
+from app.routers import instruments, ta, ta_advanced
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +30,7 @@ app.add_middleware(
 
 app.include_router(instruments.router)
 app.include_router(ta.router)
+app.include_router(ta_advanced.router)
 
 
 @app.on_event("startup")

@@ -439,6 +439,9 @@ async def generate_llm_summary(ticker: str) -> Dict[str, Any]:
             f"MACD: {'Bullish Divergence ✓' if macd_div['bullish'] else 'Bearish Divergence ✗' if macd_div['bearish'] else 'Yok'}"
         )
 
+        macd_hist_cols = [c for c in last_row.keys() if 'MACDh_' in c]
+        macd_status = "Boğa (Al)" if macd_hist_cols and last_row.get(macd_hist_cols[0], 0) > 0 else "Ayı (Sat)" if macd_hist_cols else "Nötr"
+
         return {
             "ticker": ticker,
             "close": round(close, 2),
@@ -449,6 +452,23 @@ async def generate_llm_summary(ticker: str) -> Dict[str, Any]:
             "confidence": score_data["confidence"],
             "trend": trend,
             "weekly_trend": mtf["weekly_trend"],
+            
+            # Legacy and backward-compatibility fields for summary-card and template
+            "rsi": {
+                "value": round(rsi_val, 2),
+                "status": "Aşırı Alım" if rsi_val > 70 else "Aşırı Satım" if rsi_val < 30 else "Nötr"
+            },
+            "support_resistance": {
+                "support": round(nearest_support, 2),
+                "resistance": round(nearest_resistance, 2)
+            },
+            "atr_stop_loss": round(stop_loss, 2),
+            "macd_status": macd_status,
+            "sma": {
+                "sma_20": round(last_row.get('SMA_20', 0), 2) if last_row.get('SMA_20') else None,
+                "sma_50": round(last_row.get('SMA_50', 0), 2) if last_row.get('SMA_50') else None,
+                "sma_200": round(last_row.get('SMA_200', 0), 2) if last_row.get('SMA_200') else None
+            },
             
             # NEW: Market Regime
             "market_regime": regime,

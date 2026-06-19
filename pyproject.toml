@@ -22,4 +22,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-tvdatafeed = { git = "https://github.com/rongardF/tvdatafeed.git" }
+tvdatafeed = { url = "https://github.com/rongardF/tvdatafeed/archive/refs/heads/master.zip" }

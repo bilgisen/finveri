@@ -49,7 +49,7 @@ Yanıtını şu JSON formatında ver:
 }}
 """
 
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         # We use sync generate_content in a thread if needed, but for simplicity:
         response = model.generate_content(
             prompt,

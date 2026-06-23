@@ -88,18 +88,21 @@ async def _generate_template_summary(ticker: str, ta_data: Dict[str, Any]) -> Di
     
     pattern_text = f" Mum formasyonlarında **{', '.join(patterns)}** görülüyor." if patterns else ""
 
+    # Determine unit based on ticker type (Index starts with 'X')
+    unit = "puan" if ticker.upper().startswith("X") else "TL"
+
     summary_paragraph = (
         f"**{ticker}** şu anda **{trend_tr}** eğiliminde (Teknik Skor: {score}/100). "
-        f"Mevcut {live_price:.2f} TL seviyesi üzerinden yapılan analizde, RSI değeri {rsi_val:.1f} olarak ölçüldü. "
+        f"Mevcut {live_price:.2f} {unit} seviyesi üzerinden yapılan analizde, RSI değeri {rsi_val:.1f} olarak ölçüldü. "
         f"Aktif sinyaller arasında {', '.join(signals[:3])} öne çıkıyor.{pattern_text} "
-        f"Stratejik olarak **{support:.2f} TL** destek, **{resistance:.2f} TL** direnç konumunda. "
-        f"Risk yönetimi için stop-loss seviyesi **{stop_loss:.2f} TL** olarak takip edilebilir."
+        f"Stratejik olarak **{support:.2f} {unit}** destek, **{resistance:.2f} {unit}** direnç konumunda. "
+        f"Risk yönetimi için stop-loss seviyesi **{stop_loss:.2f} {unit}** olarak takip edilebilir."
     )
 
     questions = [
-        f"{ticker} için {resistance:.2f} TL direnci ne zaman test edilebilir?",
-        f"{ticker} teknik skoru {score}/100 ile alım fırsatı sunuyor mu?",
-        f"Mevcut stop-loss ({stop_loss:.2f} TL) seviyesi güvenli mi?"
+        f"{ticker} için {resistance:.2f} {unit} direnci ne zaman test edilebilir?",
+        f"{ticker} teknik skoru {score}/100 ile alım fırsatı sunuyor mu?" if unit == "TL" else f"{ticker} teknik skoru {score}/100 ile endeksin yönünü teyit ediyor mu?",
+        f"Mevcut stop-loss ({stop_loss:.2f} {unit}) seviyesi güvenli mi?"
     ]
 
     return {

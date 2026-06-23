@@ -390,6 +390,9 @@ async def generate_llm_summary(ticker: str) -> Dict[str, Any]:
         # 4. CHATBOT CONTEXT CONSTRUCTION
         # Build rich, multi-layered context for chatbot
         
+        # Determine unit based on ticker type (Index starts with 'X')
+        unit = "puan" if ticker.upper().startswith("X") else "TL"
+
         # Key indicators summary
         rsi_val = last_row.get([c for c in last_row.keys() if 'RSI' in c][0], 50) if [c for c in last_row.keys() if 'RSI' in c] else 50
         macd_val = last_row.get([c for c in last_row.keys() if 'MACD_' in c and 's' not in c and 'h' not in c][0], 0) if [c for c in last_row.keys() if 'MACD_' in c and 's' not in c and 'h' not in c] else 0
@@ -397,20 +400,20 @@ async def generate_llm_summary(ticker: str) -> Dict[str, Any]:
         # Volume Profile context
         vp_context = ""
         if "error" not in volume_profile:
-            vp_context = (f"Volume POC (en yüksek hacim): {volume_profile['poc']:.2f} TL. "
-                         f"Value Area: {volume_profile['value_area_low']:.2f} - {volume_profile['value_area_high']:.2f} TL. ")
+            vp_context = (f"Volume POC (en yüksek hacim): {volume_profile['poc']:.2f} {unit}. "
+                         f"Value Area: {volume_profile['value_area_low']:.2f} - {volume_profile['value_area_high']:.2f} {unit}. ")
         
         # Liquidity voids context
         lv_context = ""
         if liquidity_voids:
             recent_void = liquidity_voids[0]
-            lv_context = f"Yakın likidite boşluğu: {recent_void['gap_start']:.2f} - {recent_void['gap_end']:.2f} TL ({recent_void['direction']} yönlü). "
+            lv_context = f"Yakın likidite boşluğu: {recent_void['gap_start']:.2f} - {recent_void['gap_end']:.2f} {unit} ({recent_void['direction']} yönlü). "
         
         # Enhanced LLM Prompt
         llm_text = (
             f"=== {ticker} TEKNİK ANALİZ RAPORU ===\n\n"
             f"📊 GENEL GÖRÜNÜM:\n"
-            f"Fiyat: {close:.2f} TL | Teknik Skor: {score_data['score']}/100 ({score_data['confidence']} güven)\n"
+            f"Fiyat: {close:.2f} {unit} | Teknik Skor: {score_data['score']}/100 ({score_data['confidence']} güven)\n"
             f"Trend: {trend} (Günlük), {mtf['weekly_trend']} (Haftalık)\n"
             f"Piyasa Rejimi: {regime.get('regime', 'Unknown')} - {regime.get('trend_direction', 'Neutral')}\n"
             f"Strateji Önerisi: {regime.get('recommended_strategy', 'N/A')}\n\n"
@@ -421,13 +424,13 @@ async def generate_llm_summary(ticker: str) -> Dict[str, Any]:
             f"VWAP: {'Fiyat üstünde' if close > last_row.get('VWAP_D', 0) else 'Fiyat altında'}\n\n"
             
             f"🎯 DESTEK VE DİRENÇ:\n"
-            f"Yakın Destek: {nearest_support:.2f} TL ({sr_zones.get('nearest_support', {}).get('type', 'N/A')})\n"
-            f"Yakın Direnç: {nearest_resistance:.2f} TL ({sr_zones.get('nearest_resistance', {}).get('type', 'N/A')})\n"
+            f"Yakın Destek: {nearest_support:.2f} {unit} ({sr_zones.get('nearest_support', {}).get('type', 'N/A')})\n"
+            f"Yakın Direnç: {nearest_resistance:.2f} {unit} ({sr_zones.get('nearest_resistance', {}).get('type', 'N/A')})\n"
             f"{vp_context}"
             f"{lv_context}\n"
             
             f"💰 RİSK YÖNETİMİ:\n"
-            f"Stop-Loss: {stop_loss:.2f} TL | Hedef: {take_profit:.2f} TL\n"
+            f"Stop-Loss: {stop_loss:.2f} {unit} | Hedef: {take_profit:.2f} {unit}\n"
             f"Risk/Ödül Oranı: {rr_ratio:.2f}\n"
             f"Beta (XU100): {beta} | Piyasa Genişliği: {breadth['breadth']:.1f}% ({breadth['status']})\n\n"
             

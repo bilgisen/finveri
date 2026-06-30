@@ -60,5 +60,12 @@ class Settings:
     # On-demand cache süresi (saniye) — kısa tutulur, veri sık değişir
     ONDEMAND_CACHE_TTL_SECONDS: int = int(os.getenv("ONDEMAND_CACHE_TTL_SECONDS", "60"))
 
+    # COMP API — Temel analiz rasyoları (ROE, net_margin vb.)
+    COMP_API_URL: str = os.getenv(
+        "COMP_API_URL",
+        "https://comp-ef958063.fastapicloud.dev",
+    )
+    COMP_API_TIMEOUT: int = int(os.getenv("COMP_API_TIMEOUT", "10"))
+
 
 settings = Settings()

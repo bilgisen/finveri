@@ -15,6 +15,7 @@ from app.models.instrument import (
     MarketSummaryItem, MarketSummaryResponse,
     StockDetail,
     TopMoversResponse,
+    FundamentalData,
 )
 from app.sources.isyatirim import fetch_detail
 
@@ -189,6 +190,28 @@ def get_stock_detail(code: str):
             detail=f"'{code}' için İş Yatırım verisi alınamadı.",
         )
     return StockDetail(**result)
+
+
+@router.get("/stocks/{code}/fundamental", response_model=FundamentalData, tags=["analysis"])
+def get_stock_fundamental(code: str):
+    """
+    Temel analiz verisi — P/E ratio ve finansal rasyolar.
+
+    İş Yatırım'dan fiyat + equity + capital,
+    COMP API'den ROE, net_margin vb. rasyolar çeker.
+    P/E = Fiyat / ((ROE × Equity) / Capital) formülüyle hesaplanır.
+
+    Sonuç 5 dakika cache'lenir.
+    """
+    from app.services.fundamental_service import get_fundamental_data
+
+    result = get_fundamental_data(code.upper())
+    if result is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"'{code}' için temel analiz verisi alınamadı.",
+        )
+    return FundamentalData(**result)
 
 
 @router.get("/stocks/{code}/header-summary", tags=["analysis"])

@@ -103,3 +103,30 @@ class TopMoversResponse(BaseModel):
     total: int
     last_updated: Optional[str]
     data: List[StockQuote]
+
+
+class FundamentalData(BaseModel):
+    """Temel analiz verisi — fiyat + rasyo kombinasyonu."""
+    ticker: str
+    source: str = "finveri"
+    # Piyasa verisi
+    last_price: Optional[float] = None
+    # Hesaplanan P/E
+    pe_ratio: Optional[float] = None
+    pe_ratio_method: Optional[str] = None  # "computed" | "unavailable"
+    # Ham veri
+    equity: Optional[float] = None
+    capital: Optional[float] = None
+    circulation_share: Optional[float] = None
+    # COMP API rasyoları
+    roe: Optional[float] = None
+    roa: Optional[float] = None
+    net_margin: Optional[float] = None
+    current_ratio: Optional[float] = None
+    debt_to_equity: Optional[float] = None
+    # Sektör karşılaştırması
+    sector: Optional[str] = None
+    sector_median_pe: Optional[float] = None
+    # Meta
+    computed_at: Optional[str] = None
+    data_quality: Optional[str] = None  # "high" | "medium" | "low"

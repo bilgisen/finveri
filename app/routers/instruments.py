@@ -1,8 +1,11 @@
 import json
+import logging
 from typing import List, Optional
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
+
+logger = logging.getLogger(__name__)
 from sqlalchemy import select
 from app.core.db import AsyncSessionLocal
 from app.models.history import DailyPrice
@@ -356,11 +359,27 @@ def get_instrument_by_code(code: str):
 
 @router.get("/{code}/history")
 async def get_instrument_history(code: str, limit: int = Query(500, le=1000)):
-    """Belirli bir enstrümanın geçmiş OHLCV mum verilerini döner."""
+    """
+    Belirli bir enstrümanın geçmiş OHLCV mum verilerini döner.
+    Redis cache: 1 saat TTL ile cache'lenir.
+    """
+    ticker_upper = code.upper()
+    cache_key = f"history:{ticker_upper}:{limit}"
+    r = get_redis()
+    
+    # Redis'ten kontrol et
+    try:
+        cached = r.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception as e:
+        logger.warning(f"Redis read failed for history {ticker_upper}: {e}")
+    
+    # Cache yoksa DB'den çek
     async with AsyncSessionLocal() as session:
         stmt = (
             select(DailyPrice)
-            .where(DailyPrice.ticker == code.upper())
+            .where(DailyPrice.ticker == ticker_upper)
             .order_by(DailyPrice.date.asc())
             .limit(limit)
         )
@@ -368,11 +387,11 @@ async def get_instrument_history(code: str, limit: int = Query(500, le=1000)):
         prices = res.scalars().all()
         
         if not prices:
-            raise HTTPException(status_code=404, detail=f"'{code}' için geçmiş veri bulunamadı.")
-            
-        return {
+            raise HTTPException(status_code=404, detail=f"'{ticker_upper}' için geçmiş veri bulunamadı.")
+        
+        result = {
             "success": True,
-            "ticker": code.upper(),
+            "ticker": ticker_upper,
             "data": [
                 {
                     "time": int(datetime.combine(p.date, datetime.min.time()).replace(tzinfo=timezone.utc).timestamp() * 1000),
@@ -385,3 +404,11 @@ async def get_instrument_history(code: str, limit: int = Query(500, le=1000)):
                 for p in prices
             ]
         }
+        
+        # Redis'e cache'le (1 saat TTL)
+        try:
+            r.setex(cache_key, 3600, json.dumps(result))
+        except Exception as e:
+            logger.warning(f"Redis write failed for history {ticker_upper}: {e}")
+        
+        return result

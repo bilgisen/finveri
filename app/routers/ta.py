@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Query, HTTPException
 from typing import List
+import logging
+
 from app.services.ta_engine import calculate_indicators
 from app.core.ticker_store import get_all_tickers
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ta", tags=["Technical Analysis"])
 
 @router.get("/{ticker}")
@@ -79,4 +82,42 @@ async def get_ta_summary(ticker: str):
     except Exception as e:
         logger.warning(f"Redis write failed for {ticker_upper}: {e}")
         
+    return result
+
+
+@router.get("/ceo-report/{ticker}")
+async def get_ceo_report(ticker: str):
+    """
+    CEO / Yönetim Kurulu seviyesinde profesyonel teknik analiz raporu.
+    
+    Executive summary, detaylı göstergeler, senaryo bazlı analiz ve risk değerlendirmesi içerir.
+    Premium üyelere özeldir.
+    """
+    from app.services.ceo_ta_report import generate_ceo_report
+    from app.core.redis_client import get_redis
+    import json
+    
+    ticker_upper = ticker.upper()
+    r = get_redis()
+    cache_key = f"ceo_report:{ticker_upper}"
+    
+    # Redis cache'den kontrol et (1 saat TTL)
+    try:
+        cached = r.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception as e:
+        logger.warning(f"Redis read failed for CEO report {ticker_upper}: {e}")
+    
+    result = generate_ceo_report(ticker_upper)
+    
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    
+    # Cache'e kaydet (1 saat)
+    try:
+        r.setex(cache_key, 3600, json.dumps(result))
+    except Exception as e:
+        logger.warning(f"Redis write failed for CEO report {ticker_upper}: {e}")
+    
     return result

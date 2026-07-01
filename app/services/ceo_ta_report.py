@@ -96,7 +96,8 @@ def _generate_executive_summary(
     rsi_val: float,
     regime: Dict,
     sr_zones: Dict,
-    volume_profile: Dict
+    volume_profile: Dict,
+    unit: str = "TL"
 ) -> str:
     """1 paragraflık CEO özeti"""
     
@@ -119,17 +120,20 @@ def _generate_executive_summary(
     elif rsi_val < 45:
         rsi_status = "zayıf momentum"
     
+    # Use "endeks" for index tickers instead of "hisse"
+    entity_type = "endeks" if ticker.startswith('X') else "hisse"
+    
     summary = (
-        f"{ticker} hissesi mevcut görünüm itibarıyla {trend_word} safhasındadır. "
+        f"{ticker} {entity_type}i mevcut görünüm itibarıyla {trend_word} safhasındadır. "
         f"Teknik skor {score:.0f}/100 seviyesinde olup {regime_word} yapısı ({trend_dir}) gözlemlenmektedir. "
         f"Momentum göstergeleri {rsi_status} bölgesindedir. "
     )
     
     if nearest_sup > 0:
-        summary += f"Kritik destek {_fmt_price(nearest_sup)} seviyesinde olup, bu bölge korunursa mevcut trend yapısı savunulabilir. "
+        summary += f"Kritik destek {_fmt_price(nearest_sup, unit)} seviyesinde olup, bu bölge korunursa mevcut trend yapısı savunulabilir. "
     
     if nearest_res > 0:
-        summary += f"Yukarı yönlü hareket için öncelikli teyit noktası {_fmt_price(nearest_res)} seviyesidir. "
+        summary += f"Yukarı yönlü hareket için öncelikli teyit noktası {_fmt_price(nearest_res, unit)} seviyesidir. "
     
     summary += (
         f"Teknik görünüm tek başına yatırım kararı üretmek için değil, mevcut piyasa davranışını anlamak ve "
@@ -214,10 +218,13 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
         
         rr_ratio = abs(take_profit - close) / abs(close - stop_loss) if abs(close - stop_loss) > 0 else 0
         
+        # Determine unit based on ticker type (indices use 'puan', stocks use 'TL')
+        unit = "puan" if ticker_upper.startswith('X') else "TL"
+        
         # Executive Summary
         executive_summary = _generate_executive_summary(
             ticker_upper, close, score_data['score'], trend_data,
-            rsi_val, regime, sr_zones, volume_profile
+            rsi_val, regime, sr_zones, volume_profile, unit
         )
         
         # Build report
@@ -225,6 +232,7 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
             "ticker": ticker_upper,
             "report_date": datetime.now().strftime("%d.%m.%Y %H:%M"),
             "current_price": round(close, 2),
+            "unit": unit,  # 'TL' for stocks, 'puan' for indices
             
             # Executive Summary
             "executive_summary": executive_summary,
@@ -308,17 +316,17 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
                 "positive": {
                     "name": "Pozitif Senaryo",
                     "conditions": [
-                        f"Direnç {_fmt_price(nearest_resistance)} seviyesinin hacim eşliğinde kırılması",
+                        f"Direnç {_fmt_price(nearest_resistance, unit)} seviyesinin hacim eşliğinde kırılması",
                         "RSI'nin 50 üstünde kalıcı olması",
                         "MACD histogramının pozitif bölgeye geçmesi"
                     ],
-                    "target": f"Hedef: {_fmt_price(nearest_resistance * 1.05)} - {_fmt_price(nearest_resistance * 1.10)}",
+                    "target": f"Hedef: {_fmt_price(nearest_resistance * 1.05, unit)} - {_fmt_price(nearest_resistance * 1.10, unit)}",
                     "probability": "Yüksek" if score_data['score'] > 60 else "Orta"
                 },
                 "neutral": {
                     "name": "Nötr / Konsolidasyon Senaryosu",
                     "conditions": [
-                        f"Fiyatın {_fmt_price(nearest_support)} - {_fmt_price(nearest_resistance)} aralığında hareketi",
+                        f"Fiyatın {_fmt_price(nearest_support, unit)} - {_fmt_price(nearest_resistance, unit)} aralığında hareketi",
                         "Momentum göstergelerinin nötr bölgede kalması",
                         "Hacim düşüşü ile birlikte yatay hareket"
                     ],
@@ -328,11 +336,11 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
                 "negative": {
                     "name": "Negatif Senaryo",
                     "conditions": [
-                        f"Destek {_fmt_price(nearest_support)} seviyesinin kırılması",
+                        f"Destek {_fmt_price(nearest_support, unit)} seviyesinin kırılması",
                         "RSI'nin 40 altına gerilemesi",
                         "Hacim artışıyla satış baskısının güçlenmesi"
                     ],
-                    "risk": f"Risk: {_fmt_price(close * 0.90)} - {_fmt_price(close * 0.85)} seviyelerine kadar geri çekilme",
+                    "risk": f"Risk: {_fmt_price(close * 0.90, unit)} - {_fmt_price(close * 0.85, unit)} seviyelerine kadar geri çekilme",
                     "probability": "Düşük" if score_data['score'] > 50 else "Orta"
                 }
             },
@@ -343,7 +351,7 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
                 "value_area_high": volume_profile.get('value_area_high', close * 1.02),
                 "value_area_low": volume_profile.get('value_area_low', close * 0.98),
                 "interpretation": (
-                    f"Hacim profili analizi {_fmt_price(volume_profile.get('poc', close))} seviyesinde "
+                    f"Hacim profili analizi {_fmt_price(volume_profile.get('poc', close), unit)} seviyesinde "
                     f"en yüksek yoğunluğu göstermektedir. Bu seviye fiyat için önemli bir çekim merkezi konumundadır."
                 ) if 'error' not in volume_profile else "Hacim profili verisi yeterli değil"
             },

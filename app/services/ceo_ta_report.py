@@ -139,22 +139,18 @@ def _generate_executive_summary(
     return summary
 
 
-def generate_ceo_report(ticker: str) -> Dict[str, Any]:
+async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
     """
     CEO / Yönetim Kurulu seviyesinde profesyonel teknik analiz raporu üretir.
     """
     try:
         ticker_upper = ticker.upper()
         
-        # Fetch historical data
-        df = get_historical_dataframe.__wrapped__(ticker_upper, limit=500) if hasattr(get_historical_dataframe, '__wrapped__') else None
+        # Fetch historical data (async)
+        df = await get_historical_dataframe(ticker_upper, limit=500)
         
-        # Use sync wrapper for now
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're inside an async context
-            pass
+        if df.empty:
+            return {"error": f"No historical data found for {ticker_upper}"}
         
         # Calculate all indicators
         df.ta.rsi(length=14, append=True)

@@ -109,7 +109,7 @@ async def get_ceo_report(ticker: str):
     except Exception as e:
         logger.warning(f"Redis read failed for CEO report {ticker_upper}: {e}")
     
-    result = generate_ceo_report(ticker_upper)
+    result = await generate_ceo_report(ticker_upper)
     
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])

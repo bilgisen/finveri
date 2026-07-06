@@ -378,14 +378,15 @@ async def get_instrument_history(code: str, limit: int = Query(500, le=1000)):
     
     # Cache yoksa DB'den çek
     async with AsyncSessionLocal() as session:
+        # DESC ile en güncel N kaydı al, sonra reverse ile kronolojik sıraya çevir
         stmt = (
             select(DailyPrice)
             .where(DailyPrice.ticker == ticker_upper)
-            .order_by(DailyPrice.date.asc())
+            .order_by(DailyPrice.date.desc())
             .limit(limit)
         )
         res = await session.execute(stmt)
-        prices = res.scalars().all()
+        prices = list(reversed(res.scalars().all()))
         
         if not prices:
             raise HTTPException(status_code=404, detail=f"'{ticker_upper}' için geçmiş veri bulunamadı.")

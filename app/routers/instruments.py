@@ -11,6 +11,7 @@ from app.core.db import AsyncSessionLocal
 from app.models.history import DailyPrice
 
 from app.core.redis_client import get_redis
+from app.core.config import settings
 from app.core.ticker_store import get_ticker, get_all_tickers
 from app.models.instrument import (
     Instrument, InstrumentsResponse,
@@ -361,7 +362,7 @@ def get_instrument_by_code(code: str):
 async def get_instrument_history(code: str, limit: int = Query(500, le=1000)):
     """
     Belirli bir enstrümanın geçmiş OHLCV mum verilerini döner.
-    Redis cache: 1 saat TTL ile cache'lenir.
+    Redis cache: HISTORY_CACHE_TTL_SECONDS (default 24 saat) TTL ile cache'lenir.
     """
     ticker_upper = code.upper()
     cache_key = f"history:{ticker_upper}:{limit}"
@@ -405,9 +406,9 @@ async def get_instrument_history(code: str, limit: int = Query(500, le=1000)):
             ]
         }
         
-        # Redis'e cache'le (1 saat TTL)
+        # Redis'e cache'le (HISTORY_CACHE_TTL_SECONDS TTL)
         try:
-            r.setex(cache_key, 3600, json.dumps(result))
+            r.setex(cache_key, settings.HISTORY_CACHE_TTL_SECONDS, json.dumps(result))
         except Exception as e:
             logger.warning(f"Redis write failed for history {ticker_upper}: {e}")
         

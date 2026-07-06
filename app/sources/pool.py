@@ -11,7 +11,13 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from app.core.config import settings
-from app.core.redis_client import get_redis
+
+try:
+    from app.core.redis_client import get_redis
+    _HAS_REDIS = True
+except ImportError:
+    _HAS_REDIS = False
+
 from app.sources.base import BaseSource, SourceResult
 
 logger = logging.getLogger(__name__)

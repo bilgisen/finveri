@@ -7,7 +7,11 @@ import logging
 import os
 from typing import Dict, Optional
 
-from app.core.redis_client import get_redis
+try:
+    from app.core.redis_client import get_redis
+    _HAS_REDIS = True
+except ImportError:
+    _HAS_REDIS = False
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,10 @@ def load_tickers() -> int:
     tickers.json'ı okur ve Redis'e yazar.
     Yüklenen ticker sayısını döner.
     """
+    if not _HAS_REDIS:
+        logger.warning("Redis mevcut degil, ticker yuklenemedi.")
+        return 0
+
     try:
         with open(_TICKERS_FILE, "r", encoding="utf-8") as f:
             raw = json.load(f)
@@ -45,13 +53,15 @@ def load_tickers() -> int:
     pipe.set(KEY_ALL_TICKERS, json.dumps(tickers))
     pipe.set(KEY_TICKER_CODES, json.dumps(list(tickers.keys())))
 
-    pipe.exec()
+    pipe.execute()
     logger.info("%d ticker Redis'e yüklendi.", len(tickers))
     return len(tickers)
 
 
 def get_ticker(code: str) -> Optional[Dict]:
     """Tek bir ticker'ı Redis'ten döner."""
+    if not _HAS_REDIS:
+        return None
     try:
         raw = get_redis().get(KEY_TICKER.format(code=code.upper()))
         return json.loads(raw) if raw else None
@@ -61,6 +71,8 @@ def get_ticker(code: str) -> Optional[Dict]:
 
 def get_all_tickers() -> Dict:
     """Tüm ticker'ları döner."""
+    if not _HAS_REDIS:
+        return {}
     try:
         raw = get_redis().get(KEY_ALL_TICKERS)
         return json.loads(raw) if raw else {}

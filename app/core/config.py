@@ -1,7 +1,4 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 class Settings:
@@ -11,15 +8,8 @@ class Settings:
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "8000"))
 
-    # Redis (Upstash)
-    UPSTASH_REDIS_REST_URL: str = os.getenv("UPSTASH_REDIS_REST_URL")
-    UPSTASH_REDIS_REST_TOKEN: str = os.getenv("UPSTASH_REDIS_REST_TOKEN")
-
     # Redis (OVH)
-    REDIS_URL: str = os.getenv(
-        "REDIS_URL",
-        "rediss://default:87L1Z2RDVzEv9htpofKe@valkey-d75e6cca-o033531ff.database.cloud.ovh.net:20185"
-    )
+    REDIS_URL: str = os.getenv("REDIS_URL", "")
 
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./finveri.db")
@@ -28,10 +18,6 @@ class Settings:
 
     # Gemini API Key
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-
-    # Celery (Optional, for compatibility across platforms)
-    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "")
-    CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "")
 
     # Worker
     FETCH_INTERVAL_SECONDS: int = int(os.getenv("FETCH_INTERVAL_SECONDS", "300"))

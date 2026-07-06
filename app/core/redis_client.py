@@ -2,9 +2,6 @@ import redis
 import logging
 from app.core.config import settings
 
-# Add an alias to make standard pipeline work with upstash_redis's .exec() method name
-redis.client.Pipeline.exec = redis.client.Pipeline.execute
-
 logger = logging.getLogger(__name__)
 _client = None
 

@@ -49,7 +49,12 @@ from typing import Optional
 import httpx
 
 from app.core.config import settings
-from app.core.redis_client import get_redis
+
+try:
+    from app.core.redis_client import get_redis
+    _HAS_REDIS = True
+except ImportError:
+    _HAS_REDIS = False
 
 logger = logging.getLogger(__name__)
 

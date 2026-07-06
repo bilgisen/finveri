@@ -3,10 +3,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.redis_client import ping_redis
-from app.core.ticker_store import load_tickers
-from app.worker.scheduler import start_scheduler, stop_scheduler, get_pool
 from app.routers import instruments, ta, ta_advanced
+
+# Workers ortaminda calismayan modulleri sartli import et
+try:
+    from app.core.redis_client import ping_redis
+    from app.worker.scheduler import start_scheduler, stop_scheduler, get_pool
+    from app.core.ticker_store import load_tickers
+    _HAS_WORKER_DEPS = True
+except ImportError:
+    _HAS_WORKER_DEPS = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,7 +29,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # production'da daraltın
+    allow_origins=["*"],
     allow_methods=["GET"],
     allow_headers=["*"],
 )
@@ -35,13 +41,15 @@ app.include_router(ta_advanced.router)
 
 @app.on_event("startup")
 def on_startup():
-    load_tickers()
-    start_scheduler()
+    if _HAS_WORKER_DEPS:
+        load_tickers()
+        start_scheduler()
 
 
 @app.on_event("shutdown")
 def on_shutdown():
-    stop_scheduler()
+    if _HAS_WORKER_DEPS:
+        stop_scheduler()
 
 
 @app.get("/", tags=["system"])
@@ -55,6 +63,9 @@ def root():
 
 @app.get("/health", tags=["system"])
 def health():
+    if not _HAS_WORKER_DEPS:
+        return {"status": "ok", "mode": "workers"}
+
     redis_ok = ping_redis()
     pool = get_pool()
     source_status = pool.get_status() if pool else {}
@@ -69,14 +80,16 @@ def health():
 
 @app.post("/admin/reload-tickers", tags=["admin"])
 def reload_tickers():
-    """tickers.json'ı yeniden yükler. Restart gerektirmez."""
+    if not _HAS_WORKER_DEPS:
+        return {"status": "not available in workers mode"}
     count = load_tickers()
     return {"loaded": count}
 
 
 @app.post("/admin/refresh", tags=["admin"])
 def manual_refresh():
-    """Tüm kaynakları manuel olarak günceller."""
+    if not _HAS_WORKER_DEPS:
+        return {"status": "not available in workers mode"}
     pool = get_pool()
     if not pool:
         return {"status": "pool henüz başlatılmadı"}

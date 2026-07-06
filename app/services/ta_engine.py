@@ -1,11 +1,21 @@
 import pandas as pd
-import pandas_ta as ta
 import logging
-from sqlalchemy import select
 from typing import Dict, Any
 
-from app.core.db import AsyncSessionLocal
-from app.models.history import DailyPrice
+try:
+    import pandas_ta as ta
+    _HAS_PANDAS_TA = True
+except ImportError:
+    _HAS_PANDAS_TA = False
+
+try:
+    from sqlalchemy import select
+    from app.core.db import AsyncSessionLocal
+    from app.models.history import DailyPrice
+    _HAS_DB = True
+except ImportError:
+    _HAS_DB = False
+
 from app.services.advanced_ta import (
     calculate_volume_profile,
     detect_market_regime,

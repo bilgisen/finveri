@@ -6,11 +6,21 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 
 logger = logging.getLogger(__name__)
-from sqlalchemy import select
-from app.core.db import AsyncSessionLocal
-from app.models.history import DailyPrice
 
-from app.core.redis_client import get_redis
+try:
+    from sqlalchemy import select
+    from app.core.db import AsyncSessionLocal
+    from app.models.history import DailyPrice
+    _HAS_DB = True
+except ImportError:
+    _HAS_DB = False
+
+try:
+    from app.core.redis_client import get_redis
+    _HAS_REDIS = True
+except ImportError:
+    _HAS_REDIS = False
+
 from app.core.config import settings
 from app.core.ticker_store import get_ticker, get_all_tickers
 from app.models.instrument import (

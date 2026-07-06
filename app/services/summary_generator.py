@@ -6,7 +6,12 @@ import logging
 from datetime import datetime
 from typing import Dict, Any
 
-from app.core.redis_client import get_redis
+try:
+    from app.core.redis_client import get_redis
+    _HAS_REDIS = True
+except ImportError:
+    _HAS_REDIS = False
+
 from app.services.ta_engine import generate_llm_summary
 from app.core.index_store import get_index
 

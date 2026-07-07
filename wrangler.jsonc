@@ -3,5 +3,12 @@
   "name": "finveri",
   "main": "src/entry.py",
   "compatibility_flags": ["python_workers"],
-  "compatibility_date": "2026-07-06"
+  "compatibility_date": "2026-07-06",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "finveri-db",
+      "database_id": "e96d5a1e-53b7-4985-b926-bd2aca393046"
+    }
+  ]
 }

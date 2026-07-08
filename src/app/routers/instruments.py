@@ -99,10 +99,7 @@ def get_bist_stocks(
     data, last_updated = _read_cache("bist_stocks")
 
     if data is None:
-        raise HTTPException(
-            status_code=503,
-            detail="BIST fiyat verisi henüz cache'e alınmadı.",
-        )
+        return StockQuotesResponse(total=0, last_updated=None, data=[])
 
     if search:
         q = search.lower()
@@ -291,10 +288,7 @@ def get_market_summary(
     data, last_updated = _read_cache("market_summary")
 
     if data is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Piyasa özeti henüz cache'e alınmadı.",
-        )
+        return MarketSummaryResponse(total=0, last_updated=None, data=[])
 
     if category:
         data = [i for i in data if i.get("category", "").lower() == category.lower()]

@@ -42,6 +42,32 @@ def create_app() -> FastAPI:
     app.include_router(ta_advanced.router)
     app.include_router(sync.router)
 
+    # Frontend uyumluluk alias'ları (hono.jetborsa.com)
+    import json
+    from app.core.redis_client import get_redis
+
+    @app.get("/api/market/summary", tags=["compat"])
+    def market_summary_compat():
+        r = get_redis()
+        raw = r.get("pool:market_summary:data")
+        if not raw:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"total": 0, "data": [], "last_updated": None})
+        data = json.loads(raw)
+        last_updated = r.get("pool:market_summary:last_updated")
+        return {"total": len(data), "last_updated": last_updated, "data": data}
+
+    @app.get("/api/market/stocks", tags=["compat"])
+    def market_stocks_compat():
+        r = get_redis()
+        raw = r.get("pool:bist_stocks:data")
+        if not raw:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"total": 0, "data": [], "last_updated": None})
+        data = json.loads(raw)
+        last_updated = r.get("pool:bist_stocks:last_updated")
+        return {"total": len(data), "last_updated": last_updated, "data": data}
+
     @app.on_event("startup")
     def on_startup():
         if _HAS_WORKER_DEPS:

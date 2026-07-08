@@ -41,6 +41,8 @@ _KEY_LAST_UPDATED = "pool:{data_type}:last_updated"
 
 
 def _read_cache(data_type: str):
+    if not _HAS_REDIS:
+        return None, None
     r = get_redis()
     raw = r.get(_KEY_DATA.format(data_type=data_type))
     last_updated = r.get(_KEY_LAST_UPDATED.format(data_type=data_type))

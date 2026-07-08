@@ -4,7 +4,6 @@ API başlangıcında bir kez çalışır. Reload endpoint'i ile yeniden yüklene
 """
 import json
 import logging
-import os
 from typing import Dict, Optional
 
 try:
@@ -15,9 +14,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_TICKERS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "tickers.json")
-_TICKERS_FILE = os.path.normpath(_TICKERS_FILE)
-
 KEY_TICKER = "tickers:code:{code}"
 KEY_ALL_TICKERS = "tickers:all"
 KEY_TICKER_CODES = "tickers:codes"
@@ -25,7 +21,7 @@ KEY_TICKER_CODES = "tickers:codes"
 
 def load_tickers() -> int:
     """
-    tickers.json'ı okur ve Redis'e yazar.
+    tickers_data.py'den ticker'ları okur ve Redis'e yazar.
     Yüklenen ticker sayısını döner.
     """
     if not _HAS_REDIS:
@@ -33,16 +29,11 @@ def load_tickers() -> int:
         return 0
 
     try:
-        with open(_TICKERS_FILE, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except FileNotFoundError:
-        logger.warning("tickers.json bulunamadı: %s", _TICKERS_FILE)
+        from app.core.tickers_data import TICKERS
+        tickers = TICKERS
+    except ImportError:
+        logger.warning("tickers_data modülü bulunamadı")
         return 0
-    except json.JSONDecodeError as e:
-        logger.error("tickers.json parse hatası: %s", e)
-        return 0
-
-    tickers = {k: v for k, v in raw.items() if not k.startswith("_")}
 
     r = get_redis()
     pipe = r.pipeline()

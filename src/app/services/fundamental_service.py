@@ -2,18 +2,16 @@
 Temel analiz servisi — P/E ve diğer rasyoları hesaplar.
 
 Veri kaynakları:
-- İş Yatırım: Fiyat, equity, capital, circulation_share
-- COMP API: ROE, net_margin, current_ratio, debt_to_equity
+- İş Yatırım (kurum): Fiyat, equity, capital, circulation_share, net_proceeds
 
 P/E Hesaplama:
   P/E = Fiyat / EPS
   EPS ≈ (ROE × Equity) / Capital
+  ROE ≈ Net_Proceeds / Equity
 """
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-
-import httpx
 
 from app.core.config import settings
 
@@ -63,34 +61,11 @@ def _compute_pe_ratio(
     return round(pe, 2), "computed"
 
 
-def _fetch_comp_ratios(ticker: str) -> dict:
-    """COMP API'den temel rasyoları çeker."""
-    try:
-        url = f"{settings.COMP_API_URL}/api/v1/companies/{ticker}/ratios"
-        with httpx.Client(timeout=settings.COMP_API_TIMEOUT) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
-
-        ratios = data.get("ratios", {})
-        return {
-            "roe": ratios.get("roe", {}).get("value"),
-            "roa": ratios.get("roa", {}).get("value"),
-            "net_margin": ratios.get("net_margin", {}).get("value"),
-            "current_ratio": ratios.get("current_ratio", {}).get("value"),
-            "debt_to_equity": ratios.get("debt_to_equity", {}).get("value"),
-            "sector": data.get("sector"),
-        }
-    except Exception as e:
-        logger.warning("[fundamental] COMP API fetch failed for %s: %s", ticker, e)
-        return {}
-
-
 def get_fundamental_data(ticker: str) -> Optional[dict]:
     """
     Hisse için temel analiz verisi döner.
 
-    İş Yatırım'dan fiyat + COMP API'den rasyolar çeker,
+    İş Yatırım (kurum)'dan fiyat + bilanço verileri çeker,
     P/E hesaplar ve sonucu cache'ler.
     """
     code = ticker.upper()
@@ -115,21 +90,24 @@ def get_fundamental_data(ticker: str) -> Optional[dict]:
     equity = detail.get("equity")
     capital = detail.get("capital")
     circulation_share = detail.get("circulation_share")
+    net_proceeds = detail.get("net_proceeds")
 
-    # COMP API'den rasyolar
-    comp = _fetch_comp_ratios(code)
+    # ROE hesapla (Net_Proceeds / Equity)
+    roe = None
+    if net_proceeds is not None and equity and equity > 0:
+        roe = net_proceeds / equity
 
     # P/E hesapla
     pe_ratio, pe_method = _compute_pe_ratio(
         last_price=last_price,
-        roe=comp.get("roe"),
+        roe=roe,
         equity=equity,
         capital=capital,
     )
 
     # Data quality belirle
     fields_available = sum(1 for v in [
-        last_price, equity, capital, comp.get("roe")
+        last_price, equity, capital, roe
     ] if v is not None)
     if fields_available >= 4:
         data_quality = "high"
@@ -147,12 +125,12 @@ def get_fundamental_data(ticker: str) -> Optional[dict]:
         "equity": equity,
         "capital": capital,
         "circulation_share": circulation_share,
-        "roe": comp.get("roe"),
-        "roa": comp.get("roa"),
-        "net_margin": comp.get("net_margin"),
-        "current_ratio": comp.get("current_ratio"),
-        "debt_to_equity": comp.get("debt_to_equity"),
-        "sector": comp.get("sector"),
+        "roe": roe,
+        "roa": None,
+        "net_margin": None,
+        "current_ratio": None,
+        "debt_to_equity": None,
+        "sector": None,
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "data_quality": data_quality,
     }

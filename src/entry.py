@@ -33,10 +33,14 @@ class Default(WorkerEntrypoint):
             if not _refreshed:
                 try:
                     from app.worker.workers_refresh import refresh_all
-                    await refresh_all()
-                    _refreshed = True
+                    results = await refresh_all()
+                    failed = [k for k, v in results.items() if not v]
+                    if failed:
+                        logger.warning("initial refresh partial failure: %s", failed)
+                    else:
+                        _refreshed = True
                 except Exception as e:
-                    logger.warning("initial refresh failed: %s", e)
+                    logger.error("initial refresh failed: %s", e, exc_info=True)
 
             from app.main import create_app
             app = create_app()

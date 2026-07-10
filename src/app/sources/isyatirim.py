@@ -58,7 +58,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_KEY_DETAIL = "isyatirim:detail:{code}"
+_KEY_DETAIL = "kurum:detail:{code}"
 
 _HEADERS = {
     "User-Agent": (
@@ -141,7 +141,7 @@ def _normalize(raw: dict, requested_code: str) -> dict:
 
     return {
         "code": symbol,
-        "source": "isyatirim",
+        "source": "kurum",
         "update_date": raw.get("updateDate"),
         # Anlık fiyat
         "last": raw.get("last"),

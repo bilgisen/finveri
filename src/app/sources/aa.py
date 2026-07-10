@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class AASource(BaseSource):
-    name = "aa"
+    name = "ajans"
     provides = ["bist_stocks"]
 
     _HEADERS = {
@@ -78,7 +78,7 @@ class AASource(BaseSource):
                         "diff_percent": diff_percent,
                         "volume": item.get("volume"),
                         "record_date": item.get("updateDate"),
-                        "source": "aa",
+                        "source": "ajans",
                     }
         except Exception as e:
             logger.warning("[%s] Ticker %s fetch failed: %s", self.name, code, e)
@@ -121,7 +121,7 @@ class AASource(BaseSource):
                                     "high_price": item.get("high"), "low_price": item.get("low"),
                                     "diff_price": diff_price, "diff_percent": diff_percent,
                                     "volume": item.get("volume"), "record_date": item.get("updateDate"),
-                                    "source": "aa",
+                                    "source": "ajans",
                                 }
                     except Exception as e:
                         logger.warning("[%s] Ticker %s async fetch failed: %s", self.name, code, e)

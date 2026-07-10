@@ -33,7 +33,7 @@ async def refresh_all() -> dict[str, bool]:
             logger.warning("instruments: Oyak failed: %s", result.error)
     except Exception as e:
         results["instruments"] = False
-        logger.error("instruments: %s", e)
+        logger.error("instruments: %s", e, exc_info=True)
 
     # Load tickers into KV store so AASource can find them
     _load_tickers(cache)
@@ -54,7 +54,7 @@ async def refresh_all() -> dict[str, bool]:
             logger.warning("bist_stocks: AA failed: %s", result.error)
     except Exception as e:
         results["bist_stocks"] = False
-        logger.error("bist_stocks: %s", e)
+        logger.error("bist_stocks: %s", e, exc_info=True)
 
     # market_summary: AA
     try:
@@ -70,7 +70,7 @@ async def refresh_all() -> dict[str, bool]:
             logger.warning("market_summary: AA failed: %s", result.error)
     except Exception as e:
         results["market_summary"] = False
-        logger.error("market_summary: %s", e)
+        logger.error("market_summary: %s", e, exc_info=True)
 
     return results
 

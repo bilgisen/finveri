@@ -37,6 +37,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def add_cache_control(request, call_next):
+        response = await call_next(request)
+        if request.method == "GET" and response.status_code < 400:
+            response.headers["Cache-Control"] = "public, max-age=30, s-maxage=30"
+        return response
+
     app.include_router(instruments.router)
     app.include_router(ta.router)
     app.include_router(ta_advanced.router)

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class AAMarketSummarySource(BaseSource):
-    name = "aa_market"
+    name = "ajans"
     provides = ["market_summary"]
 
     _HEADERS = {
@@ -59,7 +59,7 @@ class AAMarketSummarySource(BaseSource):
                         "diff_price": diff_price,
                         "diff_percent": diff_percent,
                         "display_order": len(data) + 1,
-                        "source": "isyatirim",
+                        "source": "ajans",
                     })
         except Exception as e:
             logger.error("[custom_summary] Is Yatirim fetch error: %s", e)

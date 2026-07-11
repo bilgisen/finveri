@@ -28,8 +28,11 @@ from app.models.instrument import (
     StockDetail,
     TopMoversResponse,
     FundamentalData,
+    CompanyProfile, Shareholder,
 )
 from app.sources.isyatirim import fetch_detail
+from app.sources.company_profile import fetch_company_profile
+from app.core.workers_cache import cache_get, cache_set
 
 router = APIRouter(
     prefix="/instruments",
@@ -223,6 +226,84 @@ def get_stock_fundamental(code: str):
             detail=f"'{code}' için temel analiz verisi alınamadı.",
         )
     return FundamentalData(**result)
+
+
+@router.get("/stocks/{code}/company-profile", response_model=CompanyProfile)
+def get_company_profile(code: str, refresh: bool = False):
+    """
+    Şirket Künyesi ve Ortaklık Yapısı — İş Yatırım kaynağı.
+    Veri neredeyse hiç değişmez; Workers KV'de 30 gün cache'lenir.
+    refresh=true ile cache bypass edilir.
+    """
+    ticker_upper = code.upper()
+    cache_key = f"company_profile:v2:{ticker_upper}"
+
+    if not refresh:
+        cached = cache_get(cache_key)
+        if cached:
+            try:
+                data = json.loads(cached)
+                return CompanyProfile(**data)
+            except Exception as e:
+                logger.warning("[company-profile] Cache parse hatası: %s", e)
+
+    result = fetch_company_profile(ticker_upper)
+    if result is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"'{code}' için şirket profili alınamadı.",
+        )
+
+    try:
+        cache_set(cache_key, json.dumps(result, ensure_ascii=False), ttl=settings.COMPANY_PROFILE_CACHE_TTL)
+    except Exception as e:
+        logger.warning("[company-profile] KV yazma hatası: %s", e)
+
+    return CompanyProfile(**result)
+
+
+@router.post("/admin/refresh-company-profiles", tags=["admin"])
+def refresh_company_profiles(offset: int = 0, limit: int = 20):
+    """
+    Şirket profillerini toplu halde KV cache'e ön yükler.
+    Limit/adet kadar ticker işlenir. Progress için offset kullanılır.
+    Tümünü doldurmak için birden çok çağrı yapılabilir.
+    """
+    from app.core.tickers_data import TICKERS
+
+    codes = sorted(TICKERS.keys())
+    batch = codes[offset:offset + limit]
+    if not batch:
+        return {"status": "done", "total": len(codes), "processed": offset}
+
+    results = {"success": 0, "skipped": 0, "failed": 0, "errors": []}
+    profile_ttl = settings.COMPANY_PROFILE_CACHE_TTL
+
+    for code in batch:
+        cache_key = f"company_profile:v2:{code}"
+        cached = cache_get(cache_key)
+        if cached:
+            results["skipped"] += 1
+            continue
+        try:
+            data = fetch_company_profile(code)
+            if data:
+                cache_set(cache_key, json.dumps(data), ttl=profile_ttl)
+                results["success"] += 1
+            else:
+                results["failed"] += 1
+                results["errors"].append(code)
+        except Exception as e:
+            logger.error("[refresh-profiles] %s: %s", code, e)
+            results["failed"] += 1
+            results["errors"].append(code)
+
+    return {
+        "status": "in_progress",
+        "total": len(codes),
+        "processed": offset + len(batch),
+        "batch": results,
+    }
 
 
 @router.get("/stocks/{code}/header-summary", tags=["analysis"])

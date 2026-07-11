@@ -105,6 +105,25 @@ class TopMoversResponse(BaseModel):
     data: List[StockQuote]
 
 
+class Shareholder(BaseModel):
+    """Ortaklık yapısı hissedar bilgisi."""
+    name: str
+    share_pct: Optional[float] = None
+
+
+class CompanyProfile(BaseModel):
+    """Şirket Künyesi + Ortaklık Yapısı (İş Yatırım kaynağı)."""
+    ticker: str
+    unvan: Optional[str] = None
+    kurulus: Optional[str] = None
+    faaliyet: Optional[str] = None
+    telefon: Optional[str] = None
+    faks: Optional[str] = None
+    adres: Optional[str] = None
+    shareholders: Optional[List[Shareholder]] = None
+    source: str = "isyatirim"
+
+
 class FundamentalData(BaseModel):
     """Temel analiz verisi — fiyat + rasyo kombinasyonu."""
     ticker: str

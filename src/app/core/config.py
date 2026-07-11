@@ -48,6 +48,9 @@ class Settings:
     # On-demand cache süresi (saniye) — kısa tutulur, veri sık değişir
     ONDEMAND_CACHE_TTL_SECONDS: int = int(os.getenv("ONDEMAND_CACHE_TTL_SECONDS", "60"))
 
+    # Şirket profili cache süresi (30 gün) — veri neredeyse hiç değişmez
+    COMPANY_PROFILE_CACHE_TTL: int = int(os.getenv("COMPANY_PROFILE_CACHE_TTL", "2592000"))
+
 
 
 

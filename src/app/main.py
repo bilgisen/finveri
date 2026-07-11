@@ -61,28 +61,11 @@ def create_app() -> FastAPI:
     )
 
     @app.middleware("http")
-    async def conditional_cache_middleware(request: Request, call_next):
+    async def add_cache_control(request: Request, call_next):
         response = await call_next(request)
-
         if request.method == "GET" and response.status_code < 400 and response.status_code != 304:
-            import json as _json
-            from starlette.responses import JSONResponse
-
             cc = "public, max-age=10, stale-while-revalidate=30" if is_market_open() else "public, max-age=86400"
             response.headers["Cache-Control"] = cc
-
-            if hasattr(response, "body"):
-                try:
-                    data = _json.loads(response.body)
-                    if isinstance(data, dict):
-                        etag = compute_etag(data)
-                        if_none_match = request.headers.get("if-none-match")
-                        if if_none_match and if_none_match == etag:
-                            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": cc})
-                        response.headers["ETag"] = etag
-                except (_json.JSONDecodeError, TypeError, AttributeError):
-                    pass
-
         return response
 
     app.include_router(instruments.router)

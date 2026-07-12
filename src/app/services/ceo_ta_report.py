@@ -234,7 +234,7 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
         stoch_d = stoch["d"][-1] if stoch["d"][-1] is not None else 50
         st = indicators.supertrend(h, l, c)
         st_val = st["supertrend"][-1] if st["supertrend"][-1] is not None else close
-        st_dir = st["direction"][-1] if st["direction"][-1] is not None else "up"
+        st_dir = st["trend"][-1] if st["trend"][-1] is not None else 1
         vwap_vals = indicators.vwap(data)
         vwap_val = vwap_vals[-1] if vwap_vals[-1] is not None else close
 
@@ -360,7 +360,7 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
                 },
                 "supertrend": {
                     "value": round(st_val, 2),
-                    "direction": "Yükseliş" if st_dir == "up" else "Düşüş",
+                    "direction": "Yükseliş" if st_dir == 1 else "Düşüş",
                 },
                 "vwap": round(vwap_val, 2),
                 "adx_details": {

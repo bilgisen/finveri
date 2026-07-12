@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routers import instruments, ta, ta_advanced, sync
+from app.routers import instruments, ta, ta_advanced, ta_sector, ta_history, sync
 
 # Workers ortaminda calismayan modulleri sartli import et
 try:
@@ -71,6 +71,8 @@ def create_app() -> FastAPI:
     app.include_router(instruments.router)
     app.include_router(ta.router)
     app.include_router(ta_advanced.router)
+    app.include_router(ta_sector.router)
+    app.include_router(ta_history.router)
     app.include_router(sync.router)
 
     # Frontend uyumluluk alias'ları (hono.jetborsa.com)

@@ -1,0 +1,22 @@
+{
+  "name": "ta-historical",
+  "main": "src/workers/historical_worker.py",
+  "compatibility_flags": ["python_workers"],
+  "compatibility_date": "2026-07-12",
+  "triggers": {
+    "crons": ["5 21 * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "finveri-db",
+      "database_id": "e96d5a1e-53b7-4985-b926-bd2aca393046"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "42286fd6509e4745b92172d515cbbe1b"
+    }
+  ]
+}

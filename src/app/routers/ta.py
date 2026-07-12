@@ -1,123 +1,217 @@
-from fastapi import APIRouter, Query, HTTPException
-from typing import List
+"""
+Technical Analysis Router — Restructured for 3 Content Layers.
+Endpoints:
+  GET /api/v1/ta/public/{kod}/summary    → Public
+  GET /api/v1/ta/member/{kod}/summary    → Member
+  GET /api/v1/ta/full/{kod}              → Full (Abone)
+  GET /api/v1/ta/context/{kod}           → Chatbot (Hono)
+  GET /api/v1/ta/batch                   → Screening
+  GET /api/v1/ta/{ticker}                → Legacy → redirect /public
+  GET /api/v1/ta/summary/{ticker}         → Legacy → redirect /member
+  GET /api/v1/ta/ceo-report/{ticker}      → Legacy → redirect /full
+"""
+import json
 import logging
+from fastapi import APIRouter, Query, HTTPException, Request
+from fastapi.responses import RedirectResponse
 
-from app.services.ta_engine import calculate_indicators
-from app.core.ticker_store import get_all_tickers
+from app.services.ta_engine import (
+    calculate_full_analysis,
+    filter_public,
+    filter_member,
+    filter_context,
+    filter_batch_result,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ta", tags=["Technical Analysis"])
 
-@router.get("/{ticker}")
-async def get_technical_analysis(
-    ticker: str, 
-    indicators: List[str] = Query(default=["rsi", "macd", "sma_20", "sma_50", "supertrend", "bbands"], description="List of indicators to calculate")
+
+def _cache_key(prefix: str, ticker: str) -> str:
+    return f"ta:{prefix}:{ticker.upper()}"
+
+
+def _get_cached(prefix: str, ticker: str):
+    """Read from KV-backed cache."""
+    from app.core.redis_client import get_redis
+    r = get_redis()
+    raw = r.get(_cache_key(prefix, ticker))
+    if raw:
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return None
+
+
+def _set_cache(prefix: str, ticker: str, data: dict, ttl: int):
+    """Write to KV-backed cache."""
+    try:
+        from app.core.redis_client import get_redis
+        r = get_redis()
+        r.setex(_cache_key(prefix, ticker), ttl, json.dumps(data, default=str))
+    except Exception:
+        pass
+
+
+# ── NEW ENDPOINTS (3 Content Layers) ──────────────────────────────────────
+
+@router.get("/public/{code}/summary")
+async def get_public_summary(code: str):
+    """
+    Layer: Public | Role: Herkes
+    Limited field set: price, basic indicators, regime label, 2-sentence summary.
+    """
+    ticker = code.upper()
+    cached = _get_cached("public", ticker)
+    if cached:
+        return cached
+
+    full = await calculate_full_analysis(ticker, with_breadth=False)
+    if "error" in full:
+        raise HTTPException(status_code=400, detail=full["error"])
+
+    result = filter_public(full)
+    _set_cache("public", ticker, result, 300)
+    return result
+
+
+@router.get("/member/{code}/summary")
+async def get_member_summary(code: str):
+    """
+    Layer: Member | Role: Uye
+    Extended: indicators, divergences, volume profile, S/R, MTF alignment.
+    """
+    ticker = code.upper()
+    cached = _get_cached("member", ticker)
+    if cached:
+        return cached
+
+    full = await calculate_full_analysis(ticker, with_breadth=False)
+    if "error" in full:
+        raise HTTPException(status_code=400, detail=full["error"])
+
+    result = filter_member(full)
+    _set_cache("member", ticker, result, 300)
+    return result
+
+
+@router.get("/full/{code}")
+async def get_full_analysis_endpoint(code: str):
+    """
+    Layer: Advanced | Role: Abone
+    Complete dataset: all indicators, patterns, scenarios, risk, composite score.
+    Used by AI report generator (via Hono orchestrator).
+    """
+    ticker = code.upper()
+    cached = _get_cached("full", ticker)
+    if cached:
+        return cached
+
+    full = await calculate_full_analysis(ticker, with_breadth=True)
+    if "error" in full:
+        raise HTTPException(status_code=400, detail=full["error"])
+
+    _set_cache("full", ticker, full, 900)
+    return full
+
+
+@router.get("/context/{code}")
+async def get_context_endpoint(
+    code: str,
+    query_type: str = Query("general", regex="^(general|entry|risk|comparison)$"),
 ):
     """
-    Returns calculated technical indicators for the requested ticker.
-    Uses Redis cache if available, otherwise calculates on the fly.
+    Layer: Chatbot | Role: Hono Orchestrator
+    Lightweight, query-optimized context. query_type filters the response:
+    - general (default): everything
+    - entry: S/R, R/R, scenarios, signals
+    - risk: stop-loss, volatility, max drawdown
+    - comparison: MTF alignment, relative strength
     """
-    from app.core.redis_client import get_redis
-    import json
-    
-    ticker_upper = ticker.upper()
-    r = get_redis()
-    cache_key = f"ta_data:{ticker_upper}"
-    
-    # Try to get from batch cache first
-    try:
-        cached = r.get(cache_key)
-        if cached:
-            full_data = json.loads(cached)
-            # Filter indicators if needed, but for now return all common ones
-            return {
-                "ticker": ticker_upper,
-                "indicators": full_data,
-                "source": "cache"
-            }
-    except Exception as e:
-        logger.warning(f"Redis read failed for {ticker_upper}: {e}")
+    ticker = code.upper()
+    cache_key = f"context:{ticker}:{query_type}"
+    cached = _get_cached(cache_key, "")
+    if cached:
+        return cached
 
-    # Fallback to on-the-fly
-    result = await calculate_indicators(ticker_upper, indicators)
-    
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
-        
+    full = await calculate_full_analysis(ticker, with_breadth=False)
+    if "error" in full:
+        raise HTTPException(status_code=400, detail=full["error"])
+
+    result = filter_context(full, query_type)
+    try:
+        _set_cache(cache_key, "", result, 300)
+    except Exception:
+        pass
+    return result
+
+
+@router.post("/batch")
+async def batch_screening(request: Request):
+    """
+    Layer: Screening | Role: Abone/Hono
+    POST body: {"tickers": ["THYAO", "ASELS", ...], "filters": {"score_min": 65, ...}}
+    Returns lightweight screening results for up to 500 tickers.
+    """
+    from app.models.technical import BatchTickerRequest
+    body_data = await request.json()
+    tickers = body_data.get("tickers", [])
+    filters = body_data.get("filters", {})
+
+    if not tickers:
+        raise HTTPException(status_code=400, detail="tickers list required")
+    if len(tickers) > 500:
+        raise HTTPException(status_code=400, detail="Max 500 tickers")
+
+    score_min = filters.get("score_min", 0)
+    regime_filter = filters.get("regime")
+    trend_filter = filters.get("trend")
+
+    results = []
+    for code in tickers:
+        try:
+            full = await calculate_full_analysis(code, with_breadth=False)
+            if "error" in full:
+                continue
+            br = filter_batch_result(full)
+            results.append(br)
+        except Exception:
+            continue
+
+    # Apply filters
+    if score_min > 0:
+        results = [r for r in results if (r.get("score") or 0) >= score_min]
+    if regime_filter:
+        results = [r for r in results if r.get("regime") == regime_filter]
+    if trend_filter:
+        results = [r for r in results if r.get("trend") == trend_filter]
+
+    results.sort(key=lambda x: x.get("score", 0), reverse=True)
+
     return {
-        "ticker": ticker_upper,
-        "indicators": result,
-        "source": "live"
+        "results": results,
+        "total": len(tickers),
+        "filtered": len(results),
     }
 
+
+# ── LEGACY ENDPOINTS (backward compat redirects) ─────────────────────────
+
+@router.get("/{ticker}")
+async def legacy_get_ta(ticker: str):
+    """Legacy: redirect to /public/{ticker}/summary"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=f"/api/v1/ta/public/{ticker}/summary", status_code=301)
+
+
 @router.get("/summary/{ticker}")
-async def get_ta_summary(ticker: str):
-    """
-    Returns an LLM-friendly summary of the current Technical Analysis status.
-    Uses Redis caching to support high-traffic volume.
-    """
-    from app.services.ta_engine import generate_llm_summary
-    from app.core.redis_client import get_redis
-    import json
-    
-    ticker_upper = ticker.upper()
-    r = get_redis()
-    cache_key = f"ta_data:{ticker_upper}"
-    
-    try:
-        cached = r.get(cache_key)
-        if cached:
-            return json.loads(cached)
-    except Exception as e:
-        logger.warning(f"Redis read failed for {ticker_upper}: {e}")
-        
-    result = await generate_llm_summary(ticker_upper)
-    
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
-        
-    try:
-        # Cache for 24 hours
-        r.setex(cache_key, 86400, json.dumps(result))
-    except Exception as e:
-        logger.warning(f"Redis write failed for {ticker_upper}: {e}")
-        
-    return result
+async def legacy_get_ta_summary(ticker: str):
+    """Legacy: redirect to /member/{ticker}/summary"""
+    return RedirectResponse(url=f"/api/v1/ta/member/{ticker}/summary", status_code=301)
 
 
 @router.get("/ceo-report/{ticker}")
-async def get_ceo_report(ticker: str):
-    """
-    CEO / Yönetim Kurulu seviyesinde profesyonel teknik analiz raporu.
-    
-    Executive summary, detaylı göstergeler, senaryo bazlı analiz ve risk değerlendirmesi içerir.
-    Premium üyelere özeldir.
-    """
-    from app.services.ceo_ta_report import generate_ceo_report
-    from app.core.redis_client import get_redis
-    import json
-    
-    ticker_upper = ticker.upper()
-    r = get_redis()
-    cache_key = f"ceo_report:{ticker_upper}"
-    
-    # Redis cache'den kontrol et (1 saat TTL)
-    try:
-        cached = r.get(cache_key)
-        if cached:
-            return json.loads(cached)
-    except Exception as e:
-        logger.warning(f"Redis read failed for CEO report {ticker_upper}: {e}")
-    
-    result = await generate_ceo_report(ticker_upper)
-    
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
-    
-    # Cache'e kaydet (1 saat)
-    try:
-        r.setex(cache_key, 3600, json.dumps(result))
-    except Exception as e:
-        logger.warning(f"Redis write failed for CEO report {ticker_upper}: {e}")
-    
-    return result
+async def legacy_get_ceo_report(ticker: str):
+    """Legacy: redirect to /full/{ticker}"""
+    return RedirectResponse(url=f"/api/v1/ta/full/{ticker}", status_code=301)

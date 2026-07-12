@@ -18,7 +18,7 @@ starlette.concurrency.run_in_threadpool = _run_sync_inline
 
 ASGI_SPEC = {"spec_version": "2.0", "version": "3.0"}
 
-_refreshed = False
+
 
 
 def _compute_etag(data: dict) -> str:
@@ -37,7 +37,6 @@ def _is_market_open() -> bool:
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        global _refreshed
         try:
             from app.core.d1 import set_db
             set_db(self.env.DB)
@@ -45,18 +44,6 @@ class Default(WorkerEntrypoint):
             from app.core.workers_cache import init_cache, load_initial
             await init_cache(self.env.KV)
             await load_initial()
-
-            if not _refreshed:
-                try:
-                    from app.worker.workers_refresh import refresh_all
-                    results = await refresh_all()
-                    failed = [k for k, v in results.items() if not v]
-                    if failed:
-                        logger.warning("initial refresh partial failure: %s", failed)
-                    else:
-                        _refreshed = True
-                except Exception as e:
-                    logger.error("initial refresh failed: %s", e, exc_info=True)
 
             from app.main import create_app
             app = create_app()

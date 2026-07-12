@@ -435,3 +435,258 @@ def enhanced_technical_score(data: List[Dict], regime: Dict[str, Any]) -> Dict[s
     except Exception as e:
         logger.error(f"Enhanced scoring error: {e}")
         return {"score": 50, "signals": [f"Error: {str(e)}"], "confidence": "Low"}
+
+
+def calculate_divergence_confidence(
+    data: list[dict],
+    rsi_div: Optional[dict] = None,
+    macd_div: Optional[dict] = None,
+    obv_div: Optional[dict] = None,
+) -> dict:
+    """
+    Multi-indicator divergence analysis with confidence scoring.
+    Detects regular and hidden divergences across RSI, MACD, OBV.
+    Returns consolidated divergence info with confidence level.
+    """
+    cols = _cols(data)
+    c = cols["close"]
+
+    if rsi_div is None:
+        from app.services.indicators import rsi, detect_divergences
+        rsi_vals = rsi(c)
+        rsi_div = detect_divergences(c, rsi_vals)
+
+    if macd_div is None:
+        from app.services.indicators import macd, detect_divergences
+        macd_vals = macd(c)
+        macd_div = detect_divergences(c, macd_vals["macd"])
+
+    if obv_div is None:
+        from app.services.indicators import obv, detect_divergences
+        obv_vals = obv(c, cols["volume"])
+        obv_div = detect_divergences(c, obv_vals)
+
+    bullish_count = sum(
+        1 for d in [rsi_div, macd_div, obv_div] if d and d.get("bullish")
+    )
+    bearish_count = sum(
+        1 for d in [rsi_div, macd_div, obv_div] if d and d.get("bearish")
+    )
+
+    total = bullish_count + bearish_count
+    if total >= 2:
+        confidence = "High"
+    elif total == 1:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+
+    return {
+        "rsi": rsi_div or {"bullish": False, "bearish": False},
+        "macd": macd_div or {"bullish": False, "bearish": False},
+        "obv": obv_div or {"bullish": False, "bearish": False},
+        "overall_confidence": confidence,
+        "divergence_count": total,
+    }
+
+
+def generate_scenarios(
+    data: list[dict],
+    sr_zones: dict,
+    regime: dict,
+    score: dict,
+) -> list[dict]:
+    """
+    Generate bullish/base/bearish scenarios with triggers, targets, invalidation.
+    Each scenario lists supporting signal count (NOT probability percentage).
+    """
+    if not data or "error" in sr_zones or "error" in regime:
+        return []
+
+    cols = _cols(data)
+    c = cols["close"]
+    current_price = c[-1]
+
+    nearest_res = sr_zones.get("nearest_resistance", {})
+    nearest_sup = sr_zones.get("nearest_support", {})
+    regime_type = regime.get("regime", "Unknown")
+    regime_dir = regime.get("trend_direction", "Neutral")
+    signals = score.get("signals", [])
+
+    bullish_signal_count = sum(1 for s in signals if s.startswith("✓") or "Bullish" in s or "Buying" in s or "Accumulation" in s or "Oversold" in s or "Golden" in s)
+    bearish_signal_count = sum(1 for s in signals if s.startswith("✗") or "Bearish" in s or "Selling" in s or "Distribution" in s or "Overbought" in s or "Death" in s)
+    neutral_count = sum(1 for s in signals if s.startswith("⊙") or "Neutral" in s)
+
+    scenarios = []
+
+    # Bullish Scenario
+    bull_trigger = nearest_res.get("price", current_price * 1.03)
+    bull_target = nearest_res.get("price", current_price * 1.08) * 1.05 if nearest_res else current_price * 1.12
+    bull_invalidation = nearest_sup.get("price", current_price * 0.95)
+
+    if regime_type in ("Strong Trend", "Weak Trend") and regime_dir == "Bullish":
+        bullish_signal_count += 2
+    if current_price > nearest_sup.get("price", 0) * 0.98 if nearest_sup else True:
+        bullish_signal_count += 1
+
+    scenarios.append({
+        "name": "Bullish",
+        "direction": "Bullish",
+        "trigger_price": round(bull_trigger, 2),
+        "target_price": round(bull_target, 2),
+        "invalidation_price": round(bull_invalidation, 2),
+        "supporting_signal_count": max(0, bullish_signal_count),
+        "description": (
+            f"Bullish scenario activates above {bull_trigger:.2f}. "
+            f"Target: {bull_target:.2f}. "
+            f"Invalidates below {bull_invalidation:.2f}."
+        ),
+    })
+
+    # Base Scenario
+    scenarios.append({
+        "name": "Base",
+        "direction": "Neutral",
+        "trigger_price": round(current_price, 2),
+        "target_price": round(nearest_res.get("price", current_price * 1.05), 2),
+        "invalidation_price": round(nearest_sup.get("price", current_price * 0.95), 2),
+        "supporting_signal_count": max(0, neutral_count),
+        "description": (
+            f"Current range continuation between "
+            f"{nearest_sup.get('price', current_price * 0.95):.2f} - "
+            f"{nearest_res.get('price', current_price * 1.05):.2f}. "
+            f"{regime.get('recommended_strategy', 'Monitor')}."
+        ),
+    })
+
+    # Bearish Scenario
+    bear_trigger = nearest_sup.get("price", current_price * 0.97)
+    bear_target = nearest_sup.get("price", current_price * 0.90) * 0.95 if nearest_sup else current_price * 0.88
+    bear_invalidation = nearest_res.get("price", current_price * 1.05)
+
+    if regime_type in ("Strong Trend", "Weak Trend") and regime_dir == "Bearish":
+        bearish_signal_count += 2
+
+    scenarios.append({
+        "name": "Bearish",
+        "direction": "Bearish",
+        "trigger_price": round(bear_trigger, 2),
+        "target_price": round(bear_target, 2),
+        "invalidation_price": round(bear_invalidation, 2),
+        "supporting_signal_count": max(0, bearish_signal_count),
+        "description": (
+            f"Bearish scenario activates below {bear_trigger:.2f}. "
+            f"Target: {bear_target:.2f}. "
+            f"Invalidates above {bear_invalidation:.2f}."
+        ),
+    })
+
+    return scenarios
+
+
+def calculate_risk_metrics(data: list[dict], regime: dict) -> dict:
+    """
+    ATR-based risk metrics: stop-loss, R/R, position sizing input.
+    """
+    if not data or "error" in regime:
+        return {"error": "Insufficient data"}
+
+    cols = _cols(data)
+    c, h, l_ = cols["close"], cols["high"], cols["low"]
+    current_price = c[-1]
+
+    from app.services.indicators import atr
+    atr_vals = atr(h, l_, c, 14)
+    atr_val = atr_vals[-1] if atr_vals[-1] is not None else current_price * 0.02
+    atr_pct = (atr_val / current_price) * 100 if current_price > 0 else 2.0
+
+    vol_regime = regime.get("volatility_regime", "Normal")
+    if vol_regime == "High Volatility":
+        atr_mult = 2.0
+    elif vol_regime == "Low Volatility":
+        atr_mult = 1.2
+    else:
+        atr_mult = 1.5
+
+    stop_loss = current_price - (atr_val * atr_mult)
+
+    if atr_pct < 1.5:
+        vol_class = "Low"
+    elif atr_pct < 3.0:
+        vol_class = "Normal"
+    elif atr_pct < 5.0:
+        vol_class = "Elevated"
+    else:
+        vol_class = "High"
+
+    return {
+        "atr": round(atr_val, 4),
+        "atr_pct": round(atr_pct, 2),
+        "atr_based_stop_loss": round(stop_loss, 2),
+        "stop_loss_pct": round(((current_price - stop_loss) / current_price) * 100, 2) if current_price > 0 else 0,
+        "risk_per_bar": round(atr_val, 4),
+        "volatility_classification": vol_class,
+        "atr_multiplier": atr_mult,
+    }
+
+
+def calculate_composite_score(
+    data: list[dict],
+    regime: dict,
+    patterns: Optional[dict] = None,
+    divergences: Optional[dict] = None,
+) -> dict:
+    """
+    Full composite scoring with 4 components:
+    - Trend (40pts): SMA alignment, ADX, trend age, MTF alignment
+    - Momentum (30pts): RSI, MACD, Stoch, pattern support
+    - Volume (20pts): OBV, MFI, relative volume, volume confirmation
+    - Pattern (10pts): active pattern quality
+    Regime-aware weighting applied.
+    """
+    base_score = enhanced_technical_score(data, regime)
+    base_score_value = base_score.get("score", 50)
+
+    pattern_score = 0
+    if patterns:
+        ps = patterns.get("score", 0)
+        pd = patterns.get("direction", "Neutral")
+        if pd == "Bullish":
+            pattern_score = ps
+        elif pd == "Bearish":
+            pattern_score = 100 - ps
+
+    divergence_score = 0
+    if divergences:
+        dc = divergences.get("divergence_count", 0)
+        conf = divergences.get("overall_confidence", "Low")
+        if dc >= 2 and conf == "High":
+            divergence_score = 15
+        elif dc >= 1:
+            divergence_score = 8
+
+    trend_comp = base_score.get("trend_component", 25)
+    momentum_comp = base_score.get("momentum_component", 15)
+    volume_comp = base_score.get("volume_component", 10)
+
+    total = trend_comp + momentum_comp + volume_comp + pattern_score + divergence_score
+    total = max(0, min(100, total))
+
+    adx_val = regime.get("adx", 0)
+    if adx_val > 25 and abs(total - 50) > 20:
+        confidence = "High"
+    elif adx_val > 20 and abs(total - 50) > 10:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+
+    return {
+        "total": total,
+        "confidence": confidence,
+        "components": {
+            "trend": trend_comp,
+            "momentum": momentum_comp,
+            "volume": volume_comp,
+            "pattern": pattern_score,
+        },
+    }

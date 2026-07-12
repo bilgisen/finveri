@@ -15,7 +15,7 @@ from workers import WorkerEntrypoint
 logger = logging.getLogger("ta-historical")
 
 
-class HistoricalWorker(WorkerEntrypoint):
+class Default(WorkerEntrypoint):
     async def fetch(self, request):
         """HTTP handler — manual trigger or health check."""
         result = await self._sync_all()
@@ -72,7 +72,7 @@ class HistoricalWorker(WorkerEntrypoint):
             logger.warning("Could not load TICKERS from bundled data")
             return []
 
-    async def _fetch_and_save(self, repo: D1Repository, ticker: str) -> bool:
+    async def _fetch_and_save(self, repo, ticker: str) -> bool:
         """Fetch historical OHLCV from İş Yatırım and save to D1."""
         import httpx
 

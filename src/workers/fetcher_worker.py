@@ -21,7 +21,7 @@ def _is_market_hours() -> bool:
     return 9 <= now.hour < 17
 
 
-class FetcherWorker(WorkerEntrypoint):
+class Default(WorkerEntrypoint):
     async def fetch(self, request):
         """HTTP handler — for manual trigger or health check."""
         results = await self._run_refresh()

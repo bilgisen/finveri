@@ -127,28 +127,28 @@ def detect_market_regime(data: List[Dict]) -> Dict[str, Any]:
         confidence = 0
         if adx_val > 25 and efficiency_ratio > 0.5:
             regime = "Strong Trend"
-            strategy = "Trend Following: Use MA crossovers, Supertrend, breakout strategies"
+            strategy = "Trend Takibi: Hareketli ortalama kesişimleri, Supertrend ve kırılım stratejileri kullanılabilir"
             confidence = 90
         elif adx_val > 20 and efficiency_ratio > 0.3:
             regime = "Weak Trend"
-            strategy = "Hybrid: Combine trend following with mean reversion filters"
+            strategy = "Hibrit: Trend takibi ile ortalama dönüş filtreleri birleştirilerek işlem yapılabilir"
             confidence = 70
         elif adx_val < 20:
             regime = "Range Bound"
-            strategy = "Mean Reversion: Use RSI, Bollinger Bands, support/resistance trades"
+            strategy = "Ortalama Dönüş: RSI, Bollinger Bantları ve destek/direnç seviyelerinden işlem fırsatları değerlendirilebilir"
             confidence = 75
         else:
             regime = "Choppy / Uncertain"
-            strategy = "Reduce position size, wait for clarity"
+            strategy = "Pozisyon büyüklüğü azaltılmalı, piyasa netleşene kadar beklenmeli"
             confidence = 40
 
         volatility_regime = "Normal"
         if volatility_pct > 4:
             volatility_regime = "High Volatility"
-            strategy += " | Widen stop-losses, reduce leverage"
+            strategy += " | Stop-loss genişletilmeli, kaldıraç azaltılmalı"
         elif volatility_pct < 1.5:
             volatility_regime = "Low Volatility"
-            strategy += " | Potential breakout ahead, monitor closely"
+            strategy += " | Potansiyel kırılım yakın olabilir, dikkatli izlenmeli"
 
         return {
             "regime": regime,
@@ -159,7 +159,7 @@ def detect_market_regime(data: List[Dict]) -> Dict[str, Any]:
             "volatility_pct": round(volatility_pct, 2),
             "confidence": confidence,
             "recommended_strategy": strategy,
-            "interpretation": f"{regime} piyasa rejimi ({trend_direction} yonlu), {volatility_regime} volatilite ile karakterize ediliyor.",
+            "interpretation": f"{regime} piyasa rejimi ({trend_direction} yönlü), {volatility_regime} volatilite ile karakterize ediliyor.",
         }
     except Exception as e:
         logger.error(f"Market regime error: {e}")

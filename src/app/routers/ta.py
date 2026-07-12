@@ -6,9 +6,9 @@ Endpoints:
   GET /api/v1/ta/full/{kod}              → Full (Abone)
   GET /api/v1/ta/context/{kod}           → Chatbot (Hono)
   GET /api/v1/ta/batch                   → Screening
-  GET /api/v1/ta/{ticker}                → Legacy → redirect /public
-  GET /api/v1/ta/summary/{ticker}         → Legacy → redirect /member
-  GET /api/v1/ta/ceo-report/{ticker}      → Legacy → redirect /full
+   GET /api/v1/ta/{ticker}                → Legacy → redirect /public
+   GET /api/v1/ta/summary/{ticker}         → Legacy → redirect /member
+   GET /api/v1/ta/ceo-report/{ticker}      → CEO AI Report (Abone)
 """
 import json
 import logging
@@ -22,6 +22,7 @@ from app.services.ta_engine import (
     filter_context,
     filter_batch_result,
 )
+from app.services.ceo_ta_report import generate_ceo_report
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ta", tags=["Technical Analysis"])
@@ -212,6 +213,14 @@ async def legacy_get_ta_summary(ticker: str):
 
 
 @router.get("/ceo-report/{ticker}")
-async def legacy_get_ceo_report(ticker: str):
-    """Legacy: redirect to /full/{ticker}"""
-    return RedirectResponse(url=f"/api/v1/ta/full/{ticker}", status_code=301)
+async def get_ceo_report(ticker: str):
+    """
+    CEO-level AI Technical Analysis Report.
+    Returns structured narrative report: overview, key levels, indicators,
+    scenarios, volume profile, risk assessment, watchlist.
+    Used by Hono orchestrator for subscriber-tier frontend (CeoTaReport.tsx).
+    """
+    result = await generate_ceo_report(ticker.upper())
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result

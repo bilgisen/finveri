@@ -1,16 +1,19 @@
 """
-ta-fetcher Worker — Cron-triggered data refresh.
-Runs every 15 minutes during market hours (09:00-17:00 IST, weekdays).
-Fetches fresh data from sources (İş Yatırım, OYAK, etc.) and writes to KV.
-
-Cloudflare Cron Trigger: */15 9-16 * * 1-5 (every 15 min, 9-16 UTC = 12-19 IST)
-Also runs on every invocation as warm-up if no recent data.
+ta-fetcher Worker — Cron-triggered data refresh with progressive batches.
+Runs every 15 minutes during market hours (09:00-18:00 IST, weekdays).
+Fetches bist_stocks from İş Yatırım in small batches to avoid CPU limits.
 """
+import asyncio
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 from workers import WorkerEntrypoint
 
 logger = logging.getLogger("ta-fetcher")
+
+_BATCH_SIZE = 30
+_OFFSET_KEY = "fetcher:batch_offset"
+CACHE_TTL = 86400
 
 
 def _is_market_hours() -> bool:
@@ -21,121 +24,116 @@ def _is_market_hours() -> bool:
     return 9 <= now.hour < 18
 
 
+def _normalize(raw: dict, code: str) -> dict:
+    last = raw.get("last") or 0
+    day_close = raw.get("dayClose") or last
+    diff_price = last - day_close
+    diff_percent = (diff_price / day_close * 100) if day_close > 0 else 0.0
+    return {
+        "code": code, "name": code, "type": "IMKB",
+        "display_name": code, "last_price": last,
+        "first_price": raw.get("open"), "high_price": raw.get("high"),
+        "low_price": raw.get("low"), "diff_price": diff_price,
+        "diff_percent": diff_percent, "volume": raw.get("volume"),
+        "record_date": raw.get("updateDate"), "source": "ajans",
+    }
+
+
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        """HTTP handler — for manual trigger or health check."""
-        results = await self._run_refresh()
-        return self._json_response(results)
+        return self._json_response({"status": "ok", "message": "alive"})
 
     async def scheduled(self, event):
-        """Cron trigger handler."""
-        logger.info("Cron trigger received: %s", event.cron)
-        if _is_market_hours():
-            await self._run_refresh()
-        else:
-            logger.info("Outside market hours — skipping refresh")
+        logger.info("Cron: %s", event.cron)
+        if not _is_market_hours():
+            logger.info("Outside market hours — skip")
+            return
+        await self._refresh_all()
 
-    async def _run_refresh(self) -> dict:
-        """Run the full data pool refresh."""
-        from app.core.d1 import set_db
-        set_db(self.env.DB)
-        from app.core.workers_cache import init_cache
-        await init_cache(self.env.KV)
+    async def _refresh_all(self):
+        now_utc = datetime.now(timezone.utc).isoformat()
 
-        results = {}
-        cache_types = ["instruments", "bist_stocks", "market_summary"]
-
-        for data_type in cache_types:
-            try:
-                ok = await self._refresh_type(data_type)
-                results[data_type] = ok
-            except Exception as e:
-                results[data_type] = False
-                logger.error("%s refresh failed: %s", data_type, e)
-
-        failed = [k for k, v in results.items() if not v]
-        if failed:
-            logger.warning("Partial failure: %s", failed)
-
+        # Instruments (OYAK) — lightweight, 1 call
         try:
-            from app.core.workers_cache import flush_pending
-            await flush_pending()
+            from js import fetch as js_fetch
+            resp = await js_fetch("https://www.oyakyatirim.com.tr/Home/GetAllInstruments")
+            if resp and resp.ok:
+                raw = await resp.json()
+                await self.env.KV.put("pool:instruments:data", json.dumps(raw), expiration_ttl=CACHE_TTL)
+                await self.env.KV.put("pool:instruments:last_updated", now_utc, expiration_ttl=CACHE_TTL)
+                logger.info("Instruments OK (%d items)", len(raw) if isinstance(raw, list) else 0)
+        except Exception as e:
+            logger.warning("Instruments failed: %s", e)
+
+        # Market summary (AA) — lightweight, 1 call
+        try:
+            from js import fetch as js_fetch
+            resp = await js_fetch("https://aafinans.com/Navigation/UstBarSembolListesiniAl")
+            if resp and resp.ok:
+                raw = await resp.json()
+                await self.env.KV.put("pool:market_summary:data", json.dumps(raw), expiration_ttl=CACHE_TTL)
+                await self.env.KV.put("pool:market_summary:last_updated", now_utc, expiration_ttl=CACHE_TTL)
+                logger.info("Market summary OK (%d items)", len(raw) if isinstance(raw, list) else 0)
+        except Exception as e:
+            logger.warning("Market summary failed: %s", e)
+
+        # BIST stocks — batched from İş Yatırım
+        try:
+            await self._refresh_stocks(now_utc)
+        except Exception as e:
+            logger.error("Stocks refresh failed: %s", e)
+
+    async def _refresh_stocks(self, now_utc: str):
+        offset = 0
+        try:
+            raw = await self.env.KV.get(_OFFSET_KEY)
+            offset = int(raw) if raw else 0
         except Exception:
             pass
 
-        return results
+        from app.core.tickers_data import TICKERS
+        codes = sorted([k for k, v in TICKERS.items() if v.get("market") == "BIST"])
 
-    async def _refresh_type(self, data_type: str) -> bool:
-        by_type = {
-            "instruments": ("app.sources.oyak", "OyakSource", "instruments"),
-            "bist_stocks": ("app.sources.aa", "AASource", "bist_stocks"),
-            "market_summary": ("app.sources.aa_market", "AAMarketSummarySource", "market_summary"),
-        }
-        mod_path, cls_name, cache_key = by_type[data_type]
+        total = len(codes)
+        batch = codes[offset:offset + _BATCH_SIZE]
+        if not batch:
+            offset = 0
+            batch = codes[:min(_BATCH_SIZE, total)]
 
-        import importlib
-        mod = importlib.import_module(mod_path)
-        source_cls = getattr(mod, cls_name)
-        source = source_cls()
+        from js import fetch as js_fetch
 
-        if hasattr(source, "async_fetch"):
-            result = await source.async_fetch(max_concurrent=20)
-        else:
-            result = source.fetch()
+        results = []
+        for i in range(0, len(batch), 10):
+            chunk = batch[i:i + 10]
+            tasks = []
+            for code in chunk:
+                url = f"https://www.isyatirim.com.tr/_layouts/15/Isyatirim.Website/Common/Data.aspx/OneEndeks?endeks={code}"
+                tasks.append(js_fetch(url))
+            responses = await asyncio.gather(*tasks)
+            for resp in responses:
+                if resp and resp.ok:
+                    try:
+                        data = await resp.json()
+                        if isinstance(data, list) and data:
+                            item = data[0]
+                            code = item.get("symbol", "")
+                            if code:
+                                results.append(_normalize(item, code))
+                    except Exception:
+                        pass
+            await asyncio.sleep(0)
 
-        if not result.success or not result.data:
-            return False
+        if results:
+            await self.env.KV.put("pool:bist_stocks:data", json.dumps(results), expiration_ttl=CACHE_TTL)
+            await self.env.KV.put("pool:bist_stocks:last_updated", now_utc, expiration_ttl=CACHE_TTL)
+            logger.info("BIST batch: %d stocks at offset %d", len(results), offset)
 
-        from app.core.workers_cache import cache_set, get_cache
-        from app.core.config import settings
-        cache = get_cache()
-        ttl = settings.CACHE_TTL_SECONDS
-        now = result.fetched_at.isoformat() if result.fetched_at else datetime.now(timezone.utc).isoformat()
-
-        clean = [{k: v for k, v in item.items() if k != "_raw"} for item in result.data]
-        pipe = cache.pipeline()
-        pipe.set(f"pool:{cache_key}:data", __import__("json").dumps(clean), ex=ttl)
-        pipe.set(f"pool:{cache_key}:last_updated", now, ex=ttl)
-        pipe.execute()
-
-        if data_type == "bist_stocks":
-            await self._save_daily_ohlcv(result.data)
-
-        return True
-
-    async def _save_daily_ohlcv(self, data: list) -> None:
-        try:
-            from app.core.d1 import D1Repository
-            db = self.env.DB
-            if db is None:
-                return
-            repo = D1Repository(db)
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            records = []
-            for item in data:
-                code = item.get("code") or item.get("ticker") or item.get("symbol")
-                if not code:
-                    continue
-                close = item.get("last_price") or item.get("close") or item.get("last")
-                if close is None:
-                    continue
-                records.append(dict(
-                    ticker=code.upper(),
-                    date=today,
-                    open=float(item.get("first_price", close) or close),
-                    high=float(item.get("high_price", close) or close),
-                    low=float(item.get("low_price", close) or close),
-                    close=float(close),
-                    volume=float(item.get("volume", 0) or 0),
-                ))
-            if records:
-                await repo.batch_insert_prices(records)
-                logger.info("Saved %d daily OHLCV snapshots to D1", len(records))
-        except Exception as e:
-            logger.warning("Failed to save daily OHLCV: %s", e)
+        new_offset = offset + _BATCH_SIZE
+        if new_offset >= total:
+            new_offset = 0
+        await self.env.KV.put(_OFFSET_KEY, str(new_offset), expiration_ttl=86400)
 
     def _json_response(self, data: dict, status: int = 200):
-        import json
-        from workers.response import Response
         body = json.dumps(data, default=str)
+        from workers.response import Response
         return Response(body, status=status, headers={"Content-Type": "application/json"})

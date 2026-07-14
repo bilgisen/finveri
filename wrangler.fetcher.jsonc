@@ -4,7 +4,7 @@
   "compatibility_flags": ["python_workers"],
   "compatibility_date": "2026-07-12",
   "triggers": {
-    "crons": ["*/15 9-16 * * 1-5"]
+    "crons": ["*/15 6-16 * * 1-5"]
   },
   "d1_databases": [
     {

@@ -35,7 +35,7 @@ def is_market_open() -> bool:
     now = datetime.now(ist)
     if now.weekday() >= 5:
         return False
-    return 9 <= now.hour < 17
+    return 9 <= now.hour < 18
 
 
 def compute_etag(data: dict) -> str:

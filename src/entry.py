@@ -32,7 +32,7 @@ def _is_market_open() -> bool:
     now = datetime.now(ist)
     if now.weekday() >= 5:
         return False
-    return 9 <= now.hour < 17
+    return 9 <= now.hour < 18
 
 
 class Default(WorkerEntrypoint):

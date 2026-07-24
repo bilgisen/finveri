@@ -187,15 +187,44 @@ async def calculate_full_analysis(
     # 8. Market context
     breadth_data = {}
     beta_val = None
+    relative_strength = None
     if with_breadth:
         try:
             from app.services.ta_engine import get_market_breadth, calculate_beta
             breadth_data = await get_market_breadth()
             beta_val = await calculate_beta(ticker)
+            index_data = await get_historical_prices("XU100", limit=500)
+            if index_data:
+                index_closes = [float(r["close"]) for r in index_data]
+                relative_strength = calculate_relative_strength_vs_index(
+                    c, index_closes
+                )
         except Exception:
             pass
 
-    # 9. Build active signals list
+    # 9. Pivot Points & Fibonacci Retracement
+    from app.services.pivot_points import compute_all_pivots
+    pivot_analysis = compute_all_pivots(h, l_, c)
+
+    # 10. Per-indicator signal classification
+    from app.services.signal_classifier import get_all_signals
+    ind = raw_indicators
+    ind_signals = get_all_signals(
+        rsi=ind.get("rsi"),
+        macd_histogram=ind.get("macd", {}).get("histogram") if isinstance(ind.get("macd"), dict) else None,
+        stoch_k=ind.get("stoch", {}).get("k") if isinstance(ind.get("stoch"), dict) else None,
+        mfi=ind.get("mfi"),
+        cci=ind.get("cci"),
+        williams_r=ind.get("williams_r"),
+        obv_trend=vol_metrics.get("obv_trend") if isinstance(vol_metrics, dict) else None,
+        adx=ind.get("adx", {}).get("adx") if isinstance(ind.get("adx"), dict) else None,
+        plus_di=ind.get("adx", {}).get("plus_di") if isinstance(ind.get("adx"), dict) else None,
+        minus_di=ind.get("adx", {}).get("minus_di") if isinstance(ind.get("adx"), dict) else None,
+        roc=ind.get("roc"),
+        supertrend_direction=ind.get("supertrend_direction"),
+    )
+
+    # 10. Build active signals list
     signals = []
     signal_sources = base_score.get("signals", [])
     for s in signal_sources:
@@ -232,6 +261,10 @@ async def calculate_full_analysis(
         "supertrend_direction": raw_indicators.get("supertrend_direction"),
         "psar": raw_indicators.get("psar"),
         "vwap": raw_indicators.get("vwap"),
+        "cci": raw_indicators.get("cci"),
+        "williams_r": raw_indicators.get("williams_r"),
+        "roc": raw_indicators.get("roc"),
+        "historical_volatility": raw_indicators.get("historical_volatility"),
     }
 
     # 10. Build comprehensive result
@@ -247,6 +280,7 @@ async def calculate_full_analysis(
         "trend_age": trend_age,
         "mtf_alignment": mtf,
         "volume_metrics": vol_metrics,
+        "indicator_signals": ind_signals,
         "regime": {
             "regime": regime_type,
             "trend_direction": regime_dir,
@@ -277,6 +311,8 @@ async def calculate_full_analysis(
         "signals": signals[:10],
         "beta": beta_val,
         "market_breadth": breadth_data,
+        "relative_strength": relative_strength,
+        "pivot_analysis": pivot_analysis,
     }
 
     # 11. Generate LLM summary text
@@ -330,6 +366,8 @@ def filter_member(full: dict) -> dict:
         "golden_cross": full.get("golden_cross"),
         "mtf_alignment": full.get("mtf_alignment"),
         "volume_metrics": full.get("volume_metrics"),
+        "indicator_signals": full.get("indicator_signals"),
+        "pivot_analysis": full.get("pivot_analysis"),
         "summary_text": _generate_member_summary(full),
         "source": "live",
     }
@@ -351,6 +389,7 @@ def filter_context(full: dict, query_type: str = "general") -> dict:
             "resistance_zones": sr.get("resistance_zones", [])[:2] if isinstance(sr, dict) else [],
         },
         "active_signals": full.get("signals", [])[:5],
+        "indicator_signals": full.get("indicator_signals"),
         "scenarios": full.get("scenarios", []),
         "risk_metrics": full.get("risk_metrics"),
         "summary_text": _generate_context_summary(full, query_type),

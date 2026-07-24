@@ -166,21 +166,33 @@ def atr(high: List[float], low: List[float], close: List[float], period: int = 1
     return result
 
 
-# ----- Stochastic Oscillator -----
-def stochastic(high: List[float], low: List[float], close: List[float], k_period: int = 14, d_period: int = 3) -> Dict[str, List[Optional[float]]]:
-    k_values: List[Optional[float]] = [None] * len(close)
+# ----- Stochastic Oscillator (Slow) -----
+def stochastic(high: List[float], low: List[float], close: List[float], k_period: int = 14, d_period: int = 3, k_smoothing: int = 3) -> Dict[str, List[Optional[float]]]:
+    raw_k: List[Optional[float]] = [None] * len(close)
     if len(close) < k_period:
-        return {"k": k_values, "d": [None] * len(close)}
+        return {"k": [None] * len(close), "d": [None] * len(close)}
     for i in range(k_period - 1, len(close)):
         window_high = max(high[i - k_period + 1:i + 1])
         window_low = min(low[i - k_period + 1:i + 1])
         if window_high - window_low > 0:
             k = ((close[i] - window_low) / (window_high - window_low)) * 100
-            k_values[i] = round(k, 2)
+            raw_k[i] = round(k, 2)
         else:
-            k_values[i] = 50.0
+            raw_k[i] = 50.0
+    # Slow Stochastic: %K = SMA(raw %K, k_smoothing), %D = SMA(%K, d_period)
+    raw_k_valid = [v for v in raw_k if v is not None]
+    if k_smoothing > 1 and len(raw_k_valid) >= k_smoothing:
+        k_smooth = sma(raw_k_valid, k_smoothing)
+    else:
+        k_smooth = raw_k_valid
+    k_values: List[Optional[float]] = [None] * len(close)
+    k_idx = 0
+    for i in range(len(close)):
+        if raw_k[i] is not None:
+            k_values[i] = k_smooth[k_idx] if k_idx < len(k_smooth) else None
+            k_idx += 1
     k_clean = [v for v in k_values if v is not None]
-    if k_clean:
+    if k_clean and len(k_clean) >= d_period:
         d_raw = sma(k_clean, d_period)
         d_values: List[Optional[float]] = []
         d_idx = 0
@@ -217,14 +229,14 @@ def adx(high: List[float], low: List[float], close: List[float], period: int = 1
     # Smoothed ATR and DM (Wilder's method)
     if n < period + 1:
         return {"adx": [None] * n, "plus_di": [None] * n, "minus_di": [None] * n}
-    # First smoothed values (SMA)
+    # First smoothed values (SMA) — skip dummy index 0
     smooth_tr = [0.0] * n
     smooth_plus = [0.0] * n
     smooth_minus = [0.0] * n
     tr_values_safe = [v if v is not None else 0.0 for v in tr_values]
-    smooth_tr[period] = sum(tr_values_safe[:period + 1]) / period
-    smooth_plus[period] = sum(plus_dm[:period + 1]) / period
-    smooth_minus[period] = sum(minus_dm[:period + 1]) / period
+    smooth_tr[period] = sum(tr_values_safe[1:period + 1]) / period
+    smooth_plus[period] = sum(plus_dm[1:period + 1]) / period
+    smooth_minus[period] = sum(minus_dm[1:period + 1]) / period
     for i in range(period + 1, n):
         smooth_tr[i] = (smooth_tr[i - 1] * (period - 1) + tr_values_safe[i]) / period
         smooth_plus[i] = (smooth_plus[i - 1] * (period - 1) + plus_dm[i]) / period
@@ -362,6 +374,73 @@ def psar(high: List[float], low: List[float], close: List[float], acceleration: 
     return result
 
 
+# ----- Commodity Channel Index -----
+def cci(high: List[float], low: List[float], close: List[float], period: int = 20) -> List[Optional[float]]:
+    result: List[Optional[float]] = [None] * len(close)
+    if len(close) < period:
+        return result
+    tp = [(h + l + c) / 3.0 for h, l, c in zip(high, low, close)]
+    tp_sma = sma(tp, period)
+    for i in range(period - 1, len(close)):
+        mean = tp_sma[i]
+        if mean is None:
+            continue
+        window = tp[i - period + 1:i + 1]
+        mad = sum(abs(x - mean) for x in window) / period
+        if mad > 0:
+            result[i] = round((tp[i] - mean) / (0.015 * mad), 2)
+        else:
+            result[i] = 0.0
+    return result
+
+
+# ----- Williams %R -----
+def williams_r(high: List[float], low: List[float], close: List[float], period: int = 14) -> List[Optional[float]]:
+    result: List[Optional[float]] = [None] * len(close)
+    if len(close) < period:
+        return result
+    for i in range(period - 1, len(close)):
+        hh = max(high[i - period + 1:i + 1])
+        ll = min(low[i - period + 1:i + 1])
+        if hh - ll > 0:
+            result[i] = round(((hh - close[i]) / (hh - ll)) * -100, 2)
+        else:
+            result[i] = 0.0
+    return result
+
+
+# ----- Rate of Change -----
+def roc(close: List[float], period: int = 12) -> List[Optional[float]]:
+    result: List[Optional[float]] = [None] * len(close)
+    if len(close) < period + 1:
+        return result
+    for i in range(period, len(close)):
+        prev = close[i - period]
+        if prev > 0:
+            result[i] = round(((close[i] - prev) / prev) * 100, 2)
+        else:
+            result[i] = 0.0
+    return result
+
+
+# ----- Historical Volatility (annualized) -----
+def historical_volatility(close: List[float], period: int = 20) -> List[Optional[float]]:
+    result: List[Optional[float]] = [None] * len(close)
+    if len(close) < period + 1:
+        return result
+    log_returns = [0.0] * len(close)
+    for i in range(1, len(close)):
+        if close[i] > 0 and close[i - 1] > 0:
+            log_returns[i] = math.log(close[i] / close[i - 1])
+    for i in range(period, len(close)):
+        window = log_returns[i - period + 1:i + 1]
+        mean = sum(window) / period
+        variance = sum((r - mean) ** 2 for r in window) / period
+        std = math.sqrt(variance)
+        result[i] = round(std * math.sqrt(252) * 100, 2)
+    return result
+
+
 # ----- VWAP -----
 def vwap(data: List[Dict]) -> List[Optional[float]]:
     result: List[Optional[float]] = []
@@ -450,6 +529,10 @@ def compute_all(data: List[Dict]) -> Dict[str, Any]:
     st = supertrend(h, l, c)
     psar_vals = psar(h, l, c)
     vwap_vals = vwap(data)
+    cci_vals = cci(h, l, c)
+    wr_vals = williams_r(h, l, c)
+    roc_vals = roc(c)
+    hv_vals = historical_volatility(c)
 
     last_idx = len(data) - 1
     def last_or_none(arr):
@@ -490,6 +573,10 @@ def compute_all(data: List[Dict]) -> Dict[str, Any]:
         "supertrend_direction": "up" if last_or_none(st["trend"]) == 1 else "down" if last_or_none(st["trend"]) == -1 else None,
         "psar": last_or_none(psar_vals),
         "vwap": last_or_none(vwap_vals),
+        "cci": last_or_none(cci_vals),
+        "williams_r": last_or_none(wr_vals),
+        "roc": last_or_none(roc_vals),
+        "historical_volatility": last_or_none(hv_vals),
     }
 
     # Divergences
@@ -574,6 +661,22 @@ def compute_selected(data: List[Dict], indicators_list: List[str]) -> Dict[str, 
             if "vwap" not in cache:
                 cache["vwap"] = vwap(data)
             result["vwap"] = cache["vwap"][last_idx] if last_idx < len(cache["vwap"]) else None
+        elif ind_lower == "cci":
+            if "cci" not in cache:
+                cache["cci"] = cci(h, l, c)
+            result["cci"] = cache["cci"][last_idx] if last_idx < len(cache["cci"]) else None
+        elif ind_lower == "williams_r":
+            if "williams_r" not in cache:
+                cache["williams_r"] = williams_r(h, l, c)
+            result["williams_r"] = cache["williams_r"][last_idx] if last_idx < len(cache["williams_r"]) else None
+        elif ind_lower == "roc":
+            if "roc" not in cache:
+                cache["roc"] = roc(c)
+            result["roc"] = cache["roc"][last_idx] if last_idx < len(cache["roc"]) else None
+        elif ind_lower == "historical_volatility":
+            if "historical_volatility" not in cache:
+                cache["historical_volatility"] = historical_volatility(c)
+            result["historical_volatility"] = cache["historical_volatility"][last_idx] if last_idx < len(cache["historical_volatility"]) else None
         elif ind_lower == "ichimoku":
             result["ichimoku"] = "not_implemented"
         elif ind_lower.startswith("sma_"):

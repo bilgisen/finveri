@@ -40,11 +40,55 @@ class ADXData(BaseModel):
     minus_di: Optional[float] = None
 
 
+class PivotLevels(BaseModel):
+    pivot: Optional[float] = None
+    r1: Optional[float] = None
+    r2: Optional[float] = None
+    r3: Optional[float] = None
+    s1: Optional[float] = None
+    s2: Optional[float] = None
+    s3: Optional[float] = None
+    r4: Optional[float] = None
+    s4: Optional[float] = None
+
+class ClassicPivots(PivotLevels):
+    pass
+
+class FibonacciPivots(PivotLevels):
+    pass
+
+class CamarillaPivots(BaseModel):
+    r1: Optional[float] = None
+    r2: Optional[float] = None
+    r3: Optional[float] = None
+    r4: Optional[float] = None
+    s1: Optional[float] = None
+    s2: Optional[float] = None
+    s3: Optional[float] = None
+    s4: Optional[float] = None
+
+class FibRetracement(BaseModel):
+    swing_high: Optional[float] = None
+    swing_low: Optional[float] = None
+    direction: str = "neutral"
+    levels: dict[str, float] = {}
+
+class PivotAnalysis(BaseModel):
+    classic: Optional[ClassicPivots] = None
+    fibonacci: Optional[FibonacciPivots] = None
+    camarilla: Optional[CamarillaPivots] = None
+    fib_retracement: Optional[FibRetracement] = None
+
+
 class SMAData(BaseModel):
     sma_20: Optional[float] = None
     sma_50: Optional[float] = None
     sma_200: Optional[float] = None
 
+
+class IndicatorSignal(BaseModel):
+    value: Optional[float] = None
+    signal: Optional[str] = None  # "Al", "Nötr", "Sat"
 
 class IndicatorSummary(BaseModel):
     rsi: Optional[float] = None
@@ -63,6 +107,26 @@ class IndicatorSummary(BaseModel):
     supertrend_direction: Optional[str] = None
     psar: Optional[float] = None
     vwap: Optional[float] = None
+    cci: Optional[float] = None
+    williams_r: Optional[float] = None
+    roc: Optional[float] = None
+    historical_volatility: Optional[float] = None
+
+class ClassifiedIndicator(BaseModel):
+    value: Optional[float] = None
+    signal: Optional[str] = None  # "Al", "Nötr", "Sat"
+
+class IndicatorSignals(BaseModel):
+    rsi: Optional[ClassifiedIndicator] = None
+    macd: Optional[ClassifiedIndicator] = None
+    stoch: Optional[ClassifiedIndicator] = None
+    mfi: Optional[ClassifiedIndicator] = None
+    cci: Optional[ClassifiedIndicator] = None
+    williams_r: Optional[ClassifiedIndicator] = None
+    obv: Optional[ClassifiedIndicator] = None
+    adx: Optional[ClassifiedIndicator] = None
+    roc: Optional[ClassifiedIndicator] = None
+    supertrend: Optional[ClassifiedIndicator] = None
 
 
 class DivergenceInfo(BaseModel):
@@ -283,6 +347,7 @@ class TAFull(BaseModel):
     trend_age: Optional[TrendAgeInfo] = None
     mtf_alignment: Optional[MTFAlignment] = None
     volume_metrics: Optional[VolumeMetrics] = None
+    pivot_analysis: Optional[PivotAnalysis] = None
     scenarios: list[Scenario] = []
     risk_metrics: Optional[RiskMetrics] = None
     score: Optional[CompositeScore] = None
@@ -301,10 +366,14 @@ class TAContext(BaseModel):
     regime: Optional[MarketRegime] = None
     key_levels: Optional[SupportResistance] = None
     active_signals: list[ActiveSignal] = []
+    indicator_signals: Optional[dict] = None
     scenarios: list[Scenario] = []
     risk_metrics: Optional[RiskMetrics] = None
     summary_text: str = ""
     query_type: str = "general"
+    relative_strength: Optional[dict] = None
+    volume_metrics: Optional[VolumeMetrics] = None
+    mtf_alignment: Optional[MTFAlignment] = None
 
 
 class BatchTickerRequest(BaseModel):

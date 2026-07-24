@@ -112,7 +112,7 @@ class CacheWarming:
             try:
                 full = await calculate_full_analysis(code)
                 if "error" not in full:
-                    cache_set(f"ta:warmed:{code}", json.dumps(full, default=str), ttl=3600)
+                    cache_set(f"ta:public:{code}", json.dumps(full, default=str), ttl=3600)
                     count += 1
             except Exception:
                 continue

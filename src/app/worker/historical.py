@@ -117,6 +117,107 @@ async def sync_all_history():
     logger.info(f"Historical sync complete: {total} records across {len(codes)} tickers")
 
 
+def _load_codes(cache) -> list:
+    """Load ticker codes from KV cache, falling back to bundled data."""
+    try:
+        if cache:
+            raw = cache.get("tickers:codes")
+            if raw:
+                import json
+                codes = json.loads(raw)
+                if codes:
+                    return codes
+    except Exception:
+        pass
+    try:
+        from app.core.tickers_data import TICKERS
+        return list(TICKERS.keys())
+    except Exception:
+        return []
+
+
+async def sync_history_batch(batch_size: int = 60) -> dict:
+    """KV cursor tabanlı tarihsel backfill.
+
+    Her çağrıda `batch_size` hisse işlenir; ilerleme KV'daki `history:cursor`
+    anahtarında tutulur. Bir tam tur bitince cursor sıfırlanır ve her cron'da
+    yalnızca eksik verili (>=250 satırı olmayan) hisseler tekrar çekilir —
+    upsert idempotent olduğu için güvenlidir.
+    """
+    from app.core.d1 import get_db, D1Repository
+    from app.core.workers_cache import get_cache, is_ready
+
+    db = get_db()
+    if db is None:
+        return {"status": "no_db"}
+
+    cache = get_cache() if is_ready() else None
+    codes = _load_codes(cache)
+    if not codes:
+        return {"status": "no_tickers", "total_tickers": 0}
+
+    cursor = 0
+    if cache:
+        try:
+            cursor = int(cache.get("history:cursor") or 0)
+        except (TypeError, ValueError):
+            cursor = 0
+
+    if cursor >= len(codes):
+        cursor = 0
+
+    batch = codes[cursor:cursor + batch_size]
+    if not batch:
+        return {"status": "no_batch", "total_tickers": len(codes)}
+
+    repo = D1Repository(db)
+    sem = asyncio.Semaphore(10)
+    processed = 0
+    skipped = 0
+    failed = 0
+
+    async def fetch_one(code):
+        nonlocal processed, skipped, failed
+        async with sem:
+            try:
+                if await repo.get_price_count(code) >= 250:
+                    skipped += 1
+                    return
+                count = await fetch_historical_with_fallback(code, {})
+                if count > 0:
+                    processed += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                failed += 1
+                logger.warning("[history-batch] %s: %s", code, e)
+
+    await asyncio.gather(*[fetch_one(code) for code in batch])
+
+    new_cursor = cursor + len(batch)
+    if new_cursor >= len(codes):
+        new_cursor = 0
+        if cache:
+            cache.set("history:completed", datetime.now(timezone.utc).isoformat(), ex=604800)
+    if cache:
+        cache.set("history:cursor", str(new_cursor), ex=604800)
+        cache.set("history:batch_size", str(batch_size), ex=604800)
+
+    logger.info(
+        "history-batch: %d processed, %d skipped, %d failed (cursor %d/%d)",
+        processed, skipped, failed, new_cursor, len(codes),
+    )
+    return {
+        "status": "ok",
+        "processed": processed,
+        "skipped": skipped,
+        "failed": failed,
+        "cursor": new_cursor,
+        "batch_size": len(batch),
+        "total_tickers": len(codes),
+    }
+
+
 if __name__ == "__main__":
     import logging
     logging.basicConfig(level=logging.INFO)

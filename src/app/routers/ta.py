@@ -55,6 +55,57 @@ def _set_cache(prefix: str, ticker: str, data: dict, ttl: int):
         pass
 
 
+# ── PERIODIC RANKING ───────────────────────────────────────────────────────
+
+@router.get("/rank")
+def get_periodic_rank(
+    period: str = Query("weekly", pattern="^(daily|weekly|monthly|yearly|ytd)$", description="Değişim periyodu"),
+    sector: str = Query(None, description="Sektör filtresi (tickers.json'daki sektör adı)"),
+    index: str = Query(None, description="Endeks kodu (bileşen listesi üzerinde sıralama)"),
+    direction: str = Query("top", pattern="^(top|bottom)$", description="top: yükselenler, bottom: düşenler"),
+    limit: int = Query(10, ge=1, le=50, description="Kaç hisse dönsün (max 50)"),
+):
+    """
+    Periyot bazında sıralama — chatbot ve screener için.
+
+    Seçenekler:
+      - Tüm pazar / sektör filtresi
+      - Endeks bileşen listesi üzerinde sıralama (index=XU100 gibi)
+    """
+    from app.core.redis_client import get_redis
+    from app.services.periodic_movers import compute_periodic_movers
+
+    r = get_redis()
+    raw = r.get("pool:bist_stocks:data")
+    if not raw:
+        raise HTTPException(status_code=503, detail="BIST fiyat verisi henüz cache'e alınmadı.")
+    data = json.loads(raw)
+
+    if index:
+        from app.core.index_store import get_index
+        index_data = get_index(index)
+        if not index_data:
+            raise HTTPException(status_code=404, detail=f"Endeks bulunamadı: {index}")
+        members = index_data.get("members") or []
+        member_codes = {m.get("code") if isinstance(m, dict) else m for m in members}
+        member_codes = {str(c).upper() for c in member_codes if c}
+        if not member_codes:
+            raise HTTPException(status_code=404, detail=f"Endeks için bileşen listesi yok: {index}")
+        data = [i for i in data if (i.get("code") or "").upper() in member_codes]
+
+    rows = compute_periodic_movers(data, period=period, sector=sector, direction=direction, limit=limit)
+
+    return {
+        "success": True,
+        "period": (period or "weekly").lower(),
+        "direction": direction,
+        "sector": sector,
+        "index": index,
+        "total": len(rows),
+        "data": rows,
+    }
+
+
 # ── NEW ENDPOINTS (3 Content Layers) ──────────────────────────────────────
 
 @router.get("/public/{code}/summary")

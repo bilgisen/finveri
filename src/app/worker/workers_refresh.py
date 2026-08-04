@@ -9,12 +9,12 @@ import logging
 from datetime import datetime, timezone
 
 from app.core.config import settings
-from app.core.workers_cache import cache_set, get_cache, is_ready
+from app.core.workers_cache import get_cache, is_ready
 
 logger = logging.getLogger(__name__)
 
 
-async def refresh_all() -> dict[str, bool]:
+async def refresh_all(include_indices: bool = True, include_history: bool = False) -> dict[str, bool]:
     """Fetch all data types and store in KV cache. Returns per-type status."""
     results = {}
     cache = get_cache() if is_ready() else None
@@ -72,6 +72,21 @@ async def refresh_all() -> dict[str, bool]:
         results["market_summary"] = False
         logger.error("market_summary: %s", e, exc_info=True)
 
+    # indices: bileşenler KAP'tan (indices:catalog KV'ye seed'li), statik.
+    # Mynet artık kullanılmıyor; refresh döngüsü katalogu ezmez.
+    results["indices"] = "static"
+
+    # history: cursor tabanlı tarihsel backfill (yalnızca cron yolunda)
+    if include_history:
+        try:
+            from app.worker.historical import sync_history_batch
+            results["history"] = await sync_history_batch(batch_size=15)
+        except Exception as e:
+            results["history"] = False
+            logger.error("history: %s", e, exc_info=True)
+    else:
+        results["history"] = "skipped"
+
     return results
 
 
@@ -80,11 +95,12 @@ def _load_tickers(cache) -> int:
     try:
         from app.core.tickers_data import TICKERS
         tickers = TICKERS
+        ttl = settings.CACHE_TTL_SECONDS
         pipe = cache.pipeline()
-        pipe.set("tickers:all", json.dumps(tickers))
-        pipe.set("tickers:codes", json.dumps(list(tickers.keys())))
+        pipe.set("tickers:all", json.dumps(tickers), ex=ttl)
+        pipe.set("tickers:codes", json.dumps(list(tickers.keys())), ex=ttl)
         for code, data in tickers.items():
-            pipe.set(f"tickers:code:{code}", json.dumps(data))
+            pipe.set(f"tickers:code:{code}", json.dumps(data), ex=ttl)
         pipe.execute()
         logger.info("Loaded %d tickers into KV store", len(tickers))
         return len(tickers)

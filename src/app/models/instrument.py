@@ -25,6 +25,21 @@ class StockQuote(BaseModel):
     volume: Optional[float] = None
     record_date: Optional[str] = None
     source: Optional[str] = None
+    # Periyodik getiri alanları (İş Yatırım kapanışlarından)
+    week_close: Optional[float] = None
+    month_close: Optional[float] = None
+    year_close: Optional[float] = None
+    prev_year_close: Optional[float] = None
+    change_week_pct: Optional[float] = None
+    change_month_pct: Optional[float] = None
+    change_ytd_pct: Optional[float] = None
+    change_year_pct: Optional[float] = None
+    # Sıralama yardımcıları
+    sector: Optional[str] = None
+    period: Optional[str] = None
+    period_label: Optional[str] = None
+    change_pct: Optional[float] = None
+    change_field: Optional[str] = None
 
 
 class MarketSummaryItem(BaseModel):
@@ -98,8 +113,9 @@ class MarketSummaryResponse(BaseModel):
 
 
 class TopMoversResponse(BaseModel):
-    """Günün en çok yükselen veya düşen hisseleri."""
+    """En çok yükselen veya düşen hisseler (periyot bazlı)."""
     direction: str   # "gainers" | "losers"
+    period: str = "daily"
     total: int
     last_updated: Optional[str]
     data: List[StockQuote]

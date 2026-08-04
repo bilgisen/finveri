@@ -43,7 +43,10 @@ class Default(WorkerEntrypoint):
 
             from app.core.workers_cache import init_cache, load_initial
             await init_cache(self.env.KV)
-            await load_initial()
+            await load_initial(prefix="pool:")
+            await load_initial(prefix="tickers:")
+            await load_initial(prefix="indices:")
+            await load_initial(prefix="history:")
 
             from app.main import create_app
             app = create_app()
@@ -121,3 +124,23 @@ class Default(WorkerEntrypoint):
             await flush_pending()
         except Exception:
             pass
+
+    async def scheduled(self, event, env, ctx):
+        """Workers cron — veri havuzunu + tarihsel backfill'i tazeler (KV kalıcı)."""
+        try:
+            from app.core.d1 import set_db
+            set_db(self.env.DB)
+
+            from app.core.workers_cache import init_cache, load_initial, flush_pending
+            await init_cache(self.env.KV)
+            await load_initial(prefix="pool:")
+            await load_initial(prefix="tickers:")
+            await load_initial(prefix="indices:")
+            await load_initial(prefix="history:")
+
+            from app.worker.workers_refresh import refresh_all
+            results = await refresh_all(include_history=True)
+            await flush_pending()
+            print(f"[Scheduled] refresh sonuçları: {results}")
+        except Exception as e:
+            print(f"[Scheduled] hata: {e}")

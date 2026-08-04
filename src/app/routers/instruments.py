@@ -43,6 +43,25 @@ _KEY_DATA = "pool:{data_type}:data"
 _KEY_LAST_UPDATED = "pool:{data_type}:last_updated"
 
 
+def _filter_by_index(data: List[dict], index: str) -> List[dict]:
+    """Endeks bileşen listesiyle data'yı filtreler."""
+    from app.core.index_store import get_index
+
+    index_data = get_index(index)
+    if not index_data:
+        raise HTTPException(status_code=404, detail=f"Endeks bulunamadı: {index}")
+
+    members = index_data.get("members") or []
+    if not members:
+        raise HTTPException(status_code=404, detail=f"Endeks için bileşen listesi yok: {index}")
+
+    member_codes = {str(m.get("code") if isinstance(m, dict) else m).upper() for m in members if m}
+    if not member_codes:
+        raise HTTPException(status_code=404, detail=f"Endeks için bileşen listesi boş: {index}")
+
+    return [s for s in data if (s.get("code") or "").upper() in member_codes]
+
+
 def _read_cache(data_type: str):
     if not _HAS_REDIS:
         return None, None
@@ -121,54 +140,64 @@ def get_bist_stocks(
 
 @router.get("/stocks/gainers", response_model=TopMoversResponse, tags=["movers"])
 def get_gainers(
+    period: str = Query("daily", pattern="^(daily|weekly|monthly|yearly|ytd)$", description="Değişim periyodu"),
+    sector: Optional[str] = Query(None, description="Sektör filtresi (tickers.json'daki sektör adı)"),
+    index: Optional[str] = Query(None, description="Endeks kodu filtresi (bileşen listesi üzerinden, ör. XU100)"),
     limit: int = Query(10, ge=1, le=50, description="Kaç hisse dönsün (max 50)"),
 ):
     """
-    Günün en çok yükselen hisseleri.
-    bist_stocks cache'indeki diff_percent değerine göre sıralanır.
+    En çok kazandıran hisseler — periyot bazında (günlük/haftalık/aylık/yıllık).
+    bist_stocks cache'indeki ilgili değişim alanına göre sıralanır.
     Sıfır değişim ve veri eksik olanlar hariç tutulur.
     """
+    from app.services.periodic_movers import compute_periodic_movers
+
     data, last_updated = _read_cache("bist_stocks")
     if data is None:
         raise HTTPException(status_code=503, detail="BIST fiyat verisi henüz cache'e alınmadı.")
 
-    gainers = sorted(
-        [i for i in data if i.get("diff_percent") and i["diff_percent"] > 0],
-        key=lambda x: x["diff_percent"],
-        reverse=True,
-    )[:limit]
+    if index:
+        data = _filter_by_index(data, index)
+
+    movers = compute_periodic_movers(data, period=period, sector=sector, direction="top", limit=limit)
 
     return TopMoversResponse(
         direction="gainers",
-        total=len(gainers),
+        period=(period or "daily").lower(),
+        total=len(movers),
         last_updated=last_updated,
-        data=[StockQuote(**{k: v for k, v in i.items() if k in StockQuote.__fields__}) for i in gainers],
+        data=[StockQuote(**{k: v for k, v in i.items() if k in StockQuote.__fields__}) for i in movers],
     )
 
 
 @router.get("/stocks/losers", response_model=TopMoversResponse, tags=["movers"])
 def get_losers(
+    period: str = Query("daily", pattern="^(daily|weekly|monthly|yearly|ytd)$", description="Değişim periyodu"),
+    sector: Optional[str] = Query(None, description="Sektör filtresi (tickers.json'daki sektör adı)"),
+    index: Optional[str] = Query(None, description="Endeks kodu filtresi (bileşen listesi üzerinden, ör. XU100)"),
     limit: int = Query(10, ge=1, le=50, description="Kaç hisse dönsün (max 50)"),
 ):
     """
-    Günün en çok düşen hisseleri.
-    bist_stocks cache'indeki diff_percent değerine göre sıralanır.
-    Sıfır değişim ve veri eksik olanlar hariç tutulur.
+    En çok kaybettiren hisseler — periyot bazında (günlük/haftalık/aylık/yıllık).
+    bist_stocks cache'indeki ilgili değişim alanına göre sıralanır.
     """
+    from app.services.periodic_movers import compute_periodic_movers
+
     data, last_updated = _read_cache("bist_stocks")
     if data is None:
         raise HTTPException(status_code=503, detail="BIST fiyat verisi henüz cache'e alınmadı.")
 
-    losers = sorted(
-        [i for i in data if i.get("diff_percent") and i["diff_percent"] < 0],
-        key=lambda x: x["diff_percent"],
-    )[:limit]
+    if index:
+        data = _filter_by_index(data, index)
+
+    movers = compute_periodic_movers(data, period=period, sector=sector, direction="bottom", limit=limit)
 
     return TopMoversResponse(
         direction="losers",
-        total=len(losers),
+        period=(period or "daily").lower(),
+        total=len(movers),
         last_updated=last_updated,
-        data=[StockQuote(**{k: v for k, v in i.items() if k in StockQuote.__fields__}) for i in losers],
+        data=[StockQuote(**{k: v for k, v in i.items() if k in StockQuote.__fields__}) for i in movers],
     )
 
 
@@ -411,6 +440,78 @@ def get_indices():
         "last_updated": last_updated,
         "data": result
     }
+
+
+@router.get("/indices/performance", tags=["indices"])
+async def get_indices_performance(
+    period: str = Query("daily", pattern="^(daily|weekly|monthly|yearly|ytd)$", description="Değişim periyodu"),
+):
+    """
+    Tüm bilinen BIST endekslerinin periyot bazında performansı.
+
+    İş Yatırım OneEndeks'ten on-demand çekilir (her endeks weekClose/
+    monthClose/yearClose döndürür) ve KV'de 5 dakika cache'lenir.
+    """
+    import asyncio
+
+    from app.core.index_store import get_all_indices
+
+    cache_key = f"indices:performance:{period}"
+    cached = cache_get(cache_key)
+    if cached:
+        try:
+            return json.loads(cached)
+        except Exception as e:
+            logger.warning("[indices/performance] cache parse hatası: %s", e)
+
+    indices = get_all_indices()
+    if not indices:
+        raise HTTPException(status_code=404, detail="Endeks listesi bulunamadı.")
+
+    codes = list(indices.keys())
+    details = await asyncio.gather(*[asyncio.to_thread(fetch_detail, code) for code in codes])
+
+    base_field = {
+        "daily": "day_close",
+        "weekly": "week_close",
+        "monthly": "month_close",
+        "yearly": "year_close",
+        "ytd": "year_close",
+    }.get((period or "daily").lower(), "day_close")
+
+    rows = []
+    for code, det in zip(codes, details):
+        if not det:
+            continue
+        last = det.get("last")
+        base = det.get(base_field)
+        if last is None or not base:
+            continue
+        change_pct = round(((float(last) - float(base)) / float(base)) * 100, 2)
+        info = indices[code]
+        rows.append({
+            "code": code,
+            "name": info.get("name", code),
+            "category": info.get("category"),
+            "last_price": float(last),
+            "change_pct": change_pct,
+        })
+
+    rows.sort(key=lambda r: r["change_pct"], reverse=True)
+
+    result = {
+        "success": True,
+        "period": (period or "daily").lower(),
+        "total": len(rows),
+        "data": rows,
+    }
+
+    try:
+        cache_set(cache_key, json.dumps(result, ensure_ascii=False), ttl=300)
+    except Exception as e:
+        logger.warning("[indices/performance] KV yazma hatası: %s", e)
+
+    return result
 
 
 @router.get("/tickers", tags=["tickers"])

@@ -21,6 +21,42 @@ from app.core.ticker_store import get_all_tickers
 logger = logging.getLogger(__name__)
 
 
+def _periodic_changes(item: dict, last: float) -> dict:
+    """İş Yatırım kapanışlarından haftalık/aylık/yıllık % değişimleri hesaplar.
+
+    - change_week_pct  : (last - weekClose) / weekClose
+    - change_month_pct : (last - monthClose) / monthClose
+    - change_ytd_pct   : (last - yearClose) / yearClose  → "bu yıl" getirisi
+    - change_year_pct  : (last - prevYearClose) / prevYearClose → 12 aylık getiri
+    """
+    def _f(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    week_close = _f(item.get("weekClose"))
+    month_close = _f(item.get("monthClose"))
+    year_close = _f(item.get("yearClose"))
+    prev_year_close = _f(item.get("prevYearClose"))
+
+    def _pct(close):
+        if close is None or not close:
+            return None
+        return round(((last - close) / close) * 100, 2)
+
+    return {
+        "week_close": week_close,
+        "month_close": month_close,
+        "year_close": year_close,
+        "prev_year_close": prev_year_close,
+        "change_week_pct": _pct(week_close),
+        "change_month_pct": _pct(month_close),
+        "change_ytd_pct": _pct(year_close),
+        "change_year_pct": _pct(prev_year_close),
+    }
+
+
 class AASource(BaseSource):
     name = "ajans"
     provides = ["bist_stocks"]
@@ -64,7 +100,9 @@ class AASource(BaseSource):
                     day_close = item.get("dayClose") or last
                     diff_price = last - day_close
                     diff_percent = (diff_price / day_close * 100) if day_close > 0 else 0.0
-                    
+
+                    periodic = _periodic_changes(item, last)
+
                     return {
                         "code": code,
                         "name": name,
@@ -79,6 +117,7 @@ class AASource(BaseSource):
                         "volume": item.get("volume"),
                         "record_date": item.get("updateDate"),
                         "source": "ajans",
+                        **periodic,
                     }
         except Exception as e:
             logger.warning("[%s] Ticker %s fetch failed: %s", self.name, code, e)
@@ -114,6 +153,9 @@ class AASource(BaseSource):
                                 day_close = item.get("dayClose") or last
                                 diff_price = last - day_close
                                 diff_percent = (diff_price / day_close * 100) if day_close > 0 else 0.0
+
+                                periodic = _periodic_changes(item, last)
+
                                 return {
                                     "code": code, "name": name, "type": "IMKB",
                                     "display_name": f"{code} - {name}",
@@ -122,6 +164,7 @@ class AASource(BaseSource):
                                     "diff_price": diff_price, "diff_percent": diff_percent,
                                     "volume": item.get("volume"), "record_date": item.get("updateDate"),
                                     "source": "ajans",
+                                    **periodic,
                                 }
                     except Exception as e:
                         logger.warning("[%s] Ticker %s async fetch failed: %s", self.name, code, e)

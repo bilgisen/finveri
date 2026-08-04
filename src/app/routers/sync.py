@@ -43,6 +43,30 @@ async def sync_all_history() -> Dict[str, Any]:
     return {"status": "ok", "records_inserted": count, "errors": errors, "total_tickers": len(tickers)}
 
 
+@router.post("/refresh")
+async def sync_refresh(history: bool = False) -> Dict[str, Any]:
+    """
+    Veri havuzunu (bist_stocks, market_summary, instruments) senkron tazeler.
+    Endeks bileşenleri KAP'tan seed'li ve statiktir (indices:catalog KV'de;
+    Mynet kullanılmaz).
+    """
+    from app.worker.workers_refresh import refresh_all
+    results = await refresh_all(include_indices=False, include_history=history)
+    return {"status": "ok", "results": results}
+
+
+@router.post("/backfill")
+async def sync_backfill(batch_size: int = 15) -> Dict[str, Any]:
+    """
+    Sadece tarihsel OHLCV backfill'inin bir batch'ini çalıştırır (havuz
+    refresh'ine dokunmaz). CPU limitlerine takılmamak için küçük batch'ler
+    kullanılır; ilerleme KV'daki `history:cursor` ile takip edilir.
+    """
+    from app.worker.historical import sync_history_batch
+    result = await sync_history_batch(batch_size=min(batch_size, 30))
+    return {"status": "ok", "result": result}
+
+
 @router.get("/status")
 async def sync_status() -> Dict[str, Any]:
     """Check how many tickers have historical data in D1."""

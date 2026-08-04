@@ -157,52 +157,69 @@ def calculate_index_breadth(
     index_tickers: list[str],
     tickers_data: dict[str, list[float]],
     live_prices: dict[str, float],
+    total_constituents: int = 0,
 ) -> dict:
     """
     Full breadth analysis for an index.
+
+    Veri derinliğine dayanıklıdır: her gösterge yalnızca yeterli geçmişi olan
+    bileşenler üzerinden hesaplanır; hangi ölçütün kaç bileşende hesaplanabildiği
+    (with_sma_*_data) ayrıca raporlanır. En az 2 kapanışı olan her bileşen
+    advance/decline taramasına dahil edilir.
     """
     above_sma_20 = 0
     above_sma_50 = 0
     above_sma_200 = 0
+    with_sma_20 = 0
+    with_sma_50 = 0
+    with_sma_200 = 0
     advancing = 0
     declining = 0
     total = 0
 
     for code in index_tickers:
         closes = tickers_data.get(code)
-        if not closes or len(closes) < 200:
+        if not closes or len(closes) < 2:
             continue
         total += 1
         current = closes[-1]
-
-        sma_20 = sma(closes, 20)
-        sma_50 = sma(closes, 50)
-        sma_200 = sma(closes, 200)
-
-        if sma_20[-1] is not None and current > sma_20[-1]:
-            above_sma_20 += 1
-        if sma_50[-1] is not None and current > sma_50[-1]:
-            above_sma_50 += 1
-        if sma_200[-1] is not None and current > sma_200[-1]:
-            above_sma_200 += 1
-
-        prev_close = closes[-2] if len(closes) >= 2 else current
+        prev_close = closes[-2]
         if current > prev_close:
             advancing += 1
         elif current < prev_close:
             declining += 1
 
+        if len(closes) >= 20:
+            with_sma_20 += 1
+            sma_20 = sma(closes, 20)
+            if sma_20[-1] is not None and current > sma_20[-1]:
+                above_sma_20 += 1
+        if len(closes) >= 50:
+            with_sma_50 += 1
+            sma_50 = sma(closes, 50)
+            if sma_50[-1] is not None and current > sma_50[-1]:
+                above_sma_50 += 1
+        if len(closes) >= 200:
+            with_sma_200 += 1
+            sma_200 = sma(closes, 200)
+            if sma_200[-1] is not None and current > sma_200[-1]:
+                above_sma_200 += 1
+
     ad_ratio = round(advancing / max(declining, 1), 2) if total > 0 else None
 
-    above_20_pct = round((above_sma_20 / max(total, 1)) * 100, 1)
-    above_50_pct = round((above_sma_50 / max(total, 1)) * 100, 1)
-    above_200_pct = round((above_sma_200 / max(total, 1)) * 100, 1)
+    above_20_pct = round((above_sma_20 / max(with_sma_20, 1)) * 100, 1)
+    above_50_pct = round((above_sma_50 / max(with_sma_50, 1)) * 100, 1)
+    above_200_pct = round((above_sma_200 / max(with_sma_200, 1)) * 100, 1)
 
     bull_score = (above_50_pct + (advancing / max(total, 1)) * 100) / 2
     status = "Bullish" if bull_score > 60 else "Bearish" if bull_score < 40 else "Neutral"
 
     return {
         "constituent_count": total,
+        "total_constituents": total_constituents or total,
+        "with_sma_20_data": with_sma_20,
+        "with_sma_50_data": with_sma_50,
+        "with_sma_200_data": with_sma_200,
         "above_sma_20": above_sma_20,
         "above_sma_20_pct": above_20_pct,
         "above_sma_50": above_sma_50,
@@ -214,7 +231,9 @@ def calculate_index_breadth(
         "advance_decline_ratio": ad_ratio,
         "status": status,
         "interpretation": (
-            f"{above_50_pct}% of constituents above 50-day MA. "
+            f"{above_20_pct}% of {with_sma_20} constituents above 20-day MA, "
+            f"{above_50_pct}% of {with_sma_50} above 50-day MA, "
+            f"{above_200_pct}% of {with_sma_200} above 200-day MA. "
             f"Advance/Decline ratio: {ad_ratio}. "
             f"Market breadth is {status.lower()}."
         ),

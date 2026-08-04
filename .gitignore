@@ -41,3 +41,6 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Cloudflare Workers
+.wrangler

@@ -53,7 +53,7 @@ class D1Repository:
         return result.results if result else []
 
     async def batch_insert_prices(self, records: List[Dict[str, Any]]) -> None:
-        """Batch insert OHLCV records with upsert."""
+        """Batch insert OHLCV records with upsert, chunked for D1 limits."""
         if not records:
             return
 
@@ -71,7 +71,10 @@ class D1Repository:
             )
             statements.append(stmt)
 
-        await self.db.batch(statements)
+        # D1 batch() çağrılarını küçük parçalara böl (CPU + limit güvenliği).
+        chunk_size = 100
+        for i in range(0, len(statements), chunk_size):
+            await self.db.batch(statements[i:i + chunk_size])
 
     async def get_prices(self, ticker: str, limit: int = 500) -> List[Dict[str, Any]]:
         """Fetch historical prices for a ticker."""

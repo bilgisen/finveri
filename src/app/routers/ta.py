@@ -28,7 +28,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ta", tags=["Technical Analysis"])
 
 
+# Bump when the CEO-report schema changes so stale KV/Redis entries from older
+# deploy (old confluence scale, no consistency_flags) are invalidated instantly.
+CEO_SCHEMA_VERSION = 3
+
+
 def _cache_key(prefix: str, ticker: str) -> str:
+    if prefix == "ceo":
+        return f"ta:{prefix}:v{CEO_SCHEMA_VERSION}:{ticker.upper()}"
     return f"ta:{prefix}:{ticker.upper()}"
 
 

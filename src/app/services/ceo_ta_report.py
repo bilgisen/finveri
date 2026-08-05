@@ -33,6 +33,17 @@ def _fmt_price(val: float, unit: str = "TL") -> str:
     return f"{val:,.2f} {unit}"
 
 
+def _normalize_component(raw: Any, lo: float, hi: float) -> int:
+    """Map a raw raw-score component (possibly negative) onto a 0-100 scale."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return 0
+    if hi <= lo:
+        return 0
+    return max(0, min(100, int(round((v - lo) / (hi - lo) * 100))))
+
+
 def _trend_interpretation(score: float, close: float, sma_20: float, sma_50: float, sma_200: float) -> Dict[str, str]:
     interp = {}
     interp["short"] = "Kısa vadeli yapı pozitif" if close > sma_20 else "Kısa vadeli yapıda zayıflama"
@@ -83,17 +94,24 @@ def _calculate_confluence_score(close: float, sma_20: float, sma_50: float, sma_
     regime_bullish = 1 if regime_dir in ("Yukselis", "Bullish", "Uptrend") else (-1 if regime_dir in ("Dusus", "Bearish", "Downtrend") else 0)
     raw = sma_bullish + price_bullish + rsi_bullish + macd_bullish + regime_bullish
     confluenced_score = max(-3, min(3, raw))
+    # 0-100 scale keeps display consistent with technical_score (frontend shows "X/100")
+    scaled = int((confluenced_score + 3) / 6 * 100)
     if confluenced_score >= 2:
         label = "Güçlü pozitif uyum"
+        direction = "Yükseliş (Bullish)"
     elif confluenced_score >= 1:
         label = "Pozitif uyum"
+        direction = "Yükseliş (Bullish)"
     elif confluenced_score >= -1:
         label = "Uyumsuz / Nötr"
+        direction = "Nötr (Neutral)"
     elif confluenced_score >= -2:
         label = "Negatif uyum"
+        direction = "Düşüş (Bearish)"
     else:
         label = "Güçlü negatif uyum"
-    return {"confluence_score": confluenced_score, "confluence_label": label, "components": {"sma_alignment": sma_bullish, "price_vs_sma": price_bullish, "rsi": rsi_bullish, "macd": macd_bullish, "regime": regime_bullish}}
+        direction = "Düşüş (Bearish)"
+    return {"confluence_score": scaled, "confluence_direction": direction, "confluence_label": label, "components": {"sma_alignment": sma_bullish, "price_vs_sma": price_bullish, "rsi": rsi_bullish, "macd": macd_bullish, "regime": regime_bullish}}
 
 
 def _regime_tr(regime: str) -> str:
@@ -152,11 +170,11 @@ def _generate_executive_summary(ticker: str, close: float, score: float, trend_d
     )
     if confluence:
         conf = confluence.get("confluence_score", 0)
-        if conf >= 2:
+        if conf >= 66:
             summary += "Göstergeler arasında güçlü pozitif uyum bulunmaktadır. "
-        elif conf <= -2:
+        elif conf <= 34:
             summary += "Göstergeler arasında güçlü negatif uyumsuzluk bulunmaktadır. "
-        elif conf != 0:
+        elif conf != 50:
             summary += "Göstergeler arasında kısmi uyum mevcuttur. "
     if divergences:
         dc = divergences.get("divergence_count", 0)
@@ -270,9 +288,18 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
         nearest_support = sr_zones.get("nearest_support", {}).get("price", close * 0.95) if "error" not in sr_zones else close * 0.95
         nearest_resistance = sr_zones.get("nearest_resistance", {}).get("price", close * 1.05) if "error" not in sr_zones else close * 1.05
 
-        stop_loss = max(close - (2.0 * atr_val), nearest_support)
+        # Stop-loss is the *invalidation* level: one ATR notch BELOW the nearest
+        # support, so a support-breakout (not a normal wick test) stops us out.
+        atr_safe = max(atr_val, close * 0.01)
+        stop_loss = min(nearest_support - 0.5 * atr_safe, close * 0.95)
+        if stop_loss >= close:
+            stop_loss = close - 1.5 * atr_safe
         take_profit = nearest_resistance
-        rr_ratio = abs(take_profit - close) / abs(close - stop_loss) if abs(close - stop_loss) > 0 else 0
+        risk = abs(close - stop_loss)
+        reward = abs(take_profit - close)
+        rr_ratio = (reward / risk) if risk > 0 else 0
+        # Sanity cap — extreme multiples usually indicate a bad level, not a good trade.
+        rr_ratio = min(rr_ratio, 10.0)
 
         unit = "puan" if ticker_upper.startswith('X') else "TL"
         executive_summary = _generate_executive_summary(
@@ -300,13 +327,16 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
                 "trend_direction": _trend_dir_tr(regime.get('trend_direction', 'Neutral')),
                 "volatility_regime": _volatility_tr(regime.get('volatility_regime', 'Normal')),
                 "recommended_strategy": regime.get('recommended_strategy', ''),
-                "confluence_score": confluence.get("confluence_score", 0),
+                "timeframe": "4S + Günlük",
+                "confidence_reason": confluence.get("confluence_label", ""),
+                "confluence_score": confluence.get("confluence_score", 50),
+                "confluence_direction": confluence.get("confluence_direction", "Nötr (Neutral)"),
                 "confluence_label": confluence.get("confluence_label", ""),
                 "score_components": {
-                    "trend": score_data.get("trend_component", 0),
-                    "momentum": score_data.get("momentum_component", 0),
-                    "volume": score_data.get("volume_component", 0),
-                    "pattern": pattern_score.get("score", 0),
+                    "trend": _normalize_component(score_data.get("trend_component", 0), -45, 45),
+                    "momentum": _normalize_component(score_data.get("momentum_component", 0), -28, 28),
+                    "volume": _normalize_component(score_data.get("volume_component", 0), -10, 10),
+                    "pattern": _normalize_component(pattern_score.get("score", 0), 0, 100),
                 },
             },
             "key_levels": {
@@ -368,12 +398,13 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
                     "efficiency_ratio": round(regime.get("efficiency_ratio", 0), 2),
                 },
             },
-            "scenarios": {
+"scenarios": {
                 "positive": {
                     "name": "Pozitif Senaryo",
                     "conditions": [f"Direnç {_fmt_price(nearest_resistance, unit)} seviyesinin hacim eşliğinde kırılması", "RSI'nin 50 üstünde kalıcı olması"],
                     "target": f"Hedef: {_fmt_price(nearest_resistance * 1.05, unit)} - {_fmt_price(nearest_resistance * 1.10, unit)}",
-                    "probability": "Yüksek" if (score_data['score'] > 60 and confluence.get("confluence_score", 0) >= 0) else ("Düşük" if confluence.get("confluence_score", 0) <= -2 else "Orta"),
+                    "invalidation": f"Geçersizlik: {_fmt_price(stop_loss, unit)} (destek kırılım seviyesinin altı)",
+                    "probability": "Yüksek" if (score_data['score'] > 60 and confluence.get("confluence_score", 50) >= 50) else ("Düşük" if confluence.get("confluence_score", 50) <= 40 else "Orta"),
                 },
                 "neutral": {
                     "name": "Nötr / Konsolidasyon Senaryosu",
@@ -385,7 +416,8 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
                     "name": "Negatif Senaryo",
                     "conditions": [f"Destek {_fmt_price(nearest_support, unit)} seviyesinin kırılması", "RSI'nin 40 altına gerilemesi"],
                     "risk": f"Risk: {_fmt_price(close * 0.90, unit)} - {_fmt_price(close * 0.85, unit)}",
-                    "probability": "Yüksek" if (score_data['score'] <= 40 and confluence.get("confluence_score", 0) <= -1) else ("Düşük" if (score_data['score'] > 55 and confluence.get("confluence_score", 0) >= 1) else "Orta"),
+                    "invalidation": f"Geçersizlik: {_fmt_price(nearest_resistance, unit)} üzerinde kapanış",
+                    "probability": "Yüksek" if (score_data['score'] <= 40 and confluence.get("confluence_score", 50) <= 45) else ("Düşük" if (score_data['score'] > 55 and confluence.get("confluence_score", 50) >= 55) else "Orta"),
                 },
             },
             "volume_profile": {

@@ -470,13 +470,14 @@ def detect_chart_patterns(data: list[dict], lookback: int = 120) -> list[dict]:
                     "volume_confirmed": vol_confirm(max(0, n - 55), n),
                 })
 
-    # Dedupe: identical name+entry/target fires from overlapping swing windows
-    # (e.g. Head & Shoulders detected for two adjacent right-shoulder indices)
-    # would otherwise render the same trade setup twice in the report.
+    # Dedupe: identical name+entry fires from overlapping swing windows (e.g.
+    # Head & Shoulders detected for two adjacent right-shoulder indices) would
+    # otherwise render the same trade setup twice. Same entry => same trade,
+    # regardless of minor target drift between windows.
     seen = set()
     unique: list[dict] = []
     for p in patterns:
-        key = (p.get("name", ""), round(p.get("entry_price", 0) or 0, 2), round(p.get("target_price", 0) or 0, 2))
+        key = (p.get("name", ""), round(p.get("entry_price", 0) or 0, 2))
         if key in seen:
             continue
         seen.add(key)

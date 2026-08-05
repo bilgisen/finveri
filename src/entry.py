@@ -18,6 +18,9 @@ starlette.concurrency.run_in_threadpool = _run_sync_inline
 
 ASGI_SPEC = {"spec_version": "2.0", "version": "3.0"}
 
+# Isolate-scoped guard: warm KV-backed caches into memory at most once per isolate.
+_bootstrapped = False
+
 
 
 
@@ -37,16 +40,19 @@ def _is_market_open() -> bool:
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
+        global _bootstrapped
         try:
             from app.core.d1 import set_db
             set_db(self.env.DB)
 
             from app.core.workers_cache import init_cache, load_initial
             await init_cache(self.env.KV)
-            await load_initial(prefix="pool:")
-            await load_initial(prefix="tickers:")
-            await load_initial(prefix="indices:")
-            await load_initial(prefix="history:")
+            if not _bootstrapped:
+                await load_initial(prefix="pool:")
+                await load_initial(prefix="tickers:")
+                await load_initial(prefix="indices:")
+                await load_initial(prefix="history:")
+                _bootstrapped = True
 
             from app.main import create_app
             app = create_app()
@@ -137,6 +143,7 @@ class Default(WorkerEntrypoint):
             await load_initial(prefix="tickers:")
             await load_initial(prefix="indices:")
             await load_initial(prefix="history:")
+            await load_initial(prefix="ta:")
 
             from app.worker.workers_refresh import refresh_all
             results = await refresh_all(include_history=True)

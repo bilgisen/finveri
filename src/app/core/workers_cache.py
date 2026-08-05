@@ -43,6 +43,27 @@ def cache_get(key: str) -> Optional[str]:
     return _data.get(key)
 
 
+async def cache_get_kv(key: str) -> Optional[str]:
+    """Memory-first read with KV fallback.
+
+    Returns the raw string value if present in memory, otherwise attempts a
+    KV read and backfills memory on hit. Used by route handlers that need
+    cache persistence across isolates (e.g. ta:/* report caches).
+    """
+    val = _data.get(key)
+    if val is not None:
+        return val
+    if _kv is not None:
+        try:
+            val = await _kv.get(key)
+            if val is not None:
+                _data[key] = val
+            return val
+        except Exception as e:
+            logger.warning("KV get failed for key=%s: %s", key, e)
+    return None
+
+
 def cache_set(key: str, value: str, ttl: Optional[int] = None) -> None:
     _data[key] = value
     if _kv is not None and ttl is not None:

@@ -32,11 +32,13 @@ def _cache_key(prefix: str, ticker: str) -> str:
     return f"ta:{prefix}:{ticker.upper()}"
 
 
-def _get_cached(prefix: str, ticker: str):
-    """Read from KV-backed cache."""
-    from app.core.redis_client import get_redis
-    r = get_redis()
-    raw = r.get(_cache_key(prefix, ticker))
+async def _get_cached(prefix: str, ticker: str):
+    """Read from KV-backed cache — memory first, KV fallback."""
+    from app.core.workers_cache import cache_get, cache_get_kv
+    key = _cache_key(prefix, ticker)
+    raw = cache_get(key)
+    if raw is None:
+        raw = await cache_get_kv(key)
     if raw:
         try:
             return json.loads(raw)
@@ -50,9 +52,13 @@ def _set_cache(prefix: str, ticker: str, data: dict, ttl: int):
     try:
         from app.core.redis_client import get_redis
         r = get_redis()
-        r.setex(_cache_key(prefix, ticker), ttl, json.dumps(data, default=str))
+        r.set(_cache_key(prefix, ticker), json.dumps(data, default=str), ex=ttl)
     except Exception:
         pass
+
+
+def _is_index(code: str) -> bool:
+    return code.upper().startswith("X") and len(code.upper()) >= 4
 
 
 # ── PERIODIC RANKING ───────────────────────────────────────────────────────
@@ -115,7 +121,7 @@ async def get_public_summary(code: str):
     Limited field set: price, basic indicators, regime label, 2-sentence summary.
     """
     ticker = code.upper()
-    cached = _get_cached("public", ticker)
+    cached = await _get_cached("public", ticker)
     if cached:
         return cached
 
@@ -135,7 +141,7 @@ async def get_member_summary(code: str):
     Extended: indicators, divergences, volume profile, S/R, MTF alignment.
     """
     ticker = code.upper()
-    cached = _get_cached("member", ticker)
+    cached = await _get_cached("member", ticker)
     if cached:
         return cached
 
@@ -156,11 +162,12 @@ async def get_full_analysis_endpoint(code: str):
     Used by AI report generator (via Hono orchestrator).
     """
     ticker = code.upper()
-    cached = _get_cached("full", ticker)
+    cached = await _get_cached("full", ticker)
     if cached:
         return cached
 
-    full = await calculate_full_analysis(ticker, with_breadth=True)
+    # Indices: skip beta/breadth/relative-strength (meaningless vs themselves)
+    full = await calculate_full_analysis(ticker, with_breadth=not _is_index(ticker))
     if "error" in full:
         raise HTTPException(status_code=400, detail=full["error"])
 
@@ -183,7 +190,7 @@ async def get_context_endpoint(
     """
     ticker = code.upper()
     cache_key = f"context:{ticker}:{query_type}"
-    cached = _get_cached(cache_key, "")
+    cached = await _get_cached(cache_key, "")
     if cached:
         return cached
 
@@ -271,7 +278,32 @@ async def get_ceo_report(ticker: str):
     scenarios, volume profile, risk assessment, watchlist.
     Used by Hono orchestrator for subscriber-tier frontend (CeoTaReport.tsx).
     """
-    result = await generate_ceo_report(ticker.upper())
+    ticker_upper = ticker.upper()
+    cached = await _get_cached("ceo", ticker_upper)
+    if cached:
+        return cached
+
+    result = await _generate_ceo_report_cached(ticker_upper)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+async def _generate_ceo_report_cached(ticker: str):
+    """Generate CEO report, cache with market-aware TTL (stock vs index same)."""
+    result = await generate_ceo_report(ticker)
+    if "error" not in result:
+        ttl = _market_ttl(300, 3600)
+        _set_cache("ceo", ticker, result, ttl)
+    return result
+
+
+def _market_ttl(open_ttl: int, closed_ttl: int) -> int:
+    """Market-aware TTL: shorter during trading hours, longer when closed."""
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=3))
+    now = datetime.now(ist)
+    if now.weekday() >= 5:
+        return closed_ttl
+    market_open = 9 <= now.hour < 18
+    return open_ttl if market_open else closed_ttl

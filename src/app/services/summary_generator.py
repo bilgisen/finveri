@@ -70,7 +70,7 @@ async def generate_header_summary(ticker: str) -> Dict[str, Any]:
     # 4. Save to Redis Cache with dynamic TTL
     ttl = 1800 if is_market_open() else 43200 # 30 mins during market hours, 12 hours after hours
     try:
-        r_client.setex(cache_key, ttl, json.dumps(result))
+        r_client.set(cache_key, json.dumps(result), ex=ttl)
     except Exception as e:
         logger.warning(f"Failed to write summary cache for {ticker}: {e}")
 

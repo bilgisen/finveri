@@ -374,14 +374,32 @@ def filter_member(full: dict) -> dict:
 
 
 def filter_context(full: dict, query_type: str = "general") -> dict:
-    """Filter full analysis → chatbot context (field set #3)."""
+    """Filter full analysis → chatbot context (field set #3).
+
+    Rich, intent-trimmed payload for the Hono AI chat pipeline. The base set
+    carries the full TA surface (indicators, regime, S/R, signals, scenarios,
+    risk, volume, divergences, MTF, pivots) so Gemini can answer computation-
+    heavy questions (stop-loss, entry levels, risk) without extra roundtrips.
+    query_type only trims optional extras and tunes summary_text:
+    - general (default): everything
+    - entry: adds entry-oriented scenario detail
+    - risk: adds risk-oriented volume/volatility detail
+    - comparison: adds MTF alignment + relative strength
+    """
     sr = full.get("sr_zones", {})
+    score = full.get("score", {})
 
     result = {
         "ticker": full.get("ticker"),
         "current_price": full.get("price"),
+        "change_pct": full.get("change_pct"),
+        "date": full.get("date"),
         "trend": full.get("trend"),
+        "weekly_trend": full.get("weekly_trend"),
         "regime": full.get("regime"),
+        "score": score.get("total", 50),
+        "confidence": score.get("confidence", "Low"),
+        "indicators": full.get("indicators"),
         "key_levels": {
             "nearest_support": sr.get("nearest_support") if isinstance(sr, dict) else None,
             "nearest_resistance": sr.get("nearest_resistance") if isinstance(sr, dict) else None,
@@ -392,6 +410,13 @@ def filter_context(full: dict, query_type: str = "general") -> dict:
         "indicator_signals": full.get("indicator_signals"),
         "scenarios": full.get("scenarios", []),
         "risk_metrics": full.get("risk_metrics"),
+        "volume_metrics": full.get("volume_metrics"),
+        "volume_profile": full.get("volume_profile"),
+        "liquidity_voids": full.get("liquidity_voids", []),
+        "divergences": full.get("divergences"),
+        "golden_cross": full.get("golden_cross"),
+        "mtf_alignment": full.get("mtf_alignment"),
+        "pivot_analysis": full.get("pivot_analysis"),
         "summary_text": _generate_context_summary(full, query_type),
         "query_type": query_type,
     }

@@ -237,6 +237,18 @@ class TestMFI:
         result = mfi([1, 2, 3], [1, 2, 3], [1, 2, 3], [100, 200, 300])
         assert all(v is None for v in result)
 
+    def test_all_up_flows_gives_neutral_not_100(self):
+        # All rising typical prices with volume previously produced MFI=100
+        # (data artifact). Now guarded to a Nötr 50.
+        c = list(range(1, 60))
+        h = [v + 2 for v in c]
+        l_ = [v - 2 for v in c]
+        v = [1_000_000.0] * 59
+        result = mfi(h, l_, c, v)
+        last = result[-1]
+        assert last is not None
+        assert last != 100.0
+
 
 class TestSupertrend:
     def test_basic(self):

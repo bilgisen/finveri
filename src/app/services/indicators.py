@@ -287,16 +287,19 @@ def mfi(high: List[float], low: List[float], close: List[float], volume: List[fl
         positive_flow = 0.0
         negative_flow = 0.0
         for j in range(i - period + 1, i + 1):
-            if j > 0 and typical_prices[j] > typical_prices[j - 1]:
-                positive_flow += money_flows[j]
-            elif j > 0:
-                negative_flow += money_flows[j]
-        if negative_flow > 0:
+            if j > 0 and money_flows[j] > 0:
+                if typical_prices[j] > typical_prices[j - 1]:
+                    positive_flow += money_flows[j]
+                elif typical_prices[j] < typical_prices[j - 1]:
+                    negative_flow += money_flows[j]
+        # Division guard: when one side has no flow (often volume/first-bar
+        # artifacts) report Nötr 50 instead of the mathematically extreme 100/0.
+        if negative_flow <= 0 or positive_flow <= 0:
+            result[i] = 50.0
+        else:
             mfr = positive_flow / negative_flow
             mfi_val = 100.0 - (100.0 / (1.0 + mfr))
             result[i] = round(mfi_val, 2)
-        else:
-            result[i] = 100.0
     return result
 
 

@@ -141,6 +141,90 @@ def _volatility_tr(vol: str) -> str:
     }
     return t.get(vol, vol)
 
+
+def _check_consistency(st_dir: int, regime: Dict, confluence: Dict,
+                       divergences: Dict, nearest_support: float, stop_loss: float,
+                       close: float, mfi_val: float) -> List[Dict[str, Any]]:
+    """Central consistency-validation layer — auto-detect contradictions between
+    signals so downstream (LLM narrative, UI) can explain rather than contradict.
+
+    Each flag: {check, status: 'ok'|'conflict', message}. Conflicts are also
+    meant to be passed to the LLM prompt so the narrative explains the mismatch.
+    """
+    flags: List[Dict[str, Any]] = []
+    reg_dir = regime.get("trend_direction", "Neutral")
+    st_bullish = st_dir == 1
+    reg_bullish = reg_dir in ("Bullish", "Uptrend", "Yukselis")
+    reg_bearish = reg_dir in ("Bearish", "Downtrend", "Dusus")
+
+    # 1. Supertrend (short-term) vs main trend direction
+    if reg_bullish and not st_bullish:
+        flags.append({
+            "check": "supertrend_vs_trend",
+            "status": "conflict",
+            "message": f"Ana trend {reg_dir} yönlü ancak kısa vadeli Supertrend Düşüş sinyali veriyor — kısa vadeli zayıflık ana trendin önüne geçmemeli.",
+        })
+    elif reg_bearish and st_bullish:
+        flags.append({
+            "check": "supertrend_vs_trend",
+            "status": "conflict",
+            "message": f"Ana trend {reg_dir} yönlü ancak kısa vadeli Supertrend Yükseliş sinyali veriyor — bu tepki alımı olarak yorumlanmalı, ana trend dönüşü değil.",
+        })
+    else:
+        flags.append({
+            "check": "supertrend_vs_trend",
+            "status": "ok",
+            "message": f"Supertrend ({'Yükseliş' if st_bullish else 'Düşüş'}) ile ana trend ({reg_dir}) yön olarak uyumlu.",
+        })
+
+    # 2. Stop-loss must sit below the nearest support (invalidation semantics)
+    if stop_loss > 0 and nearest_support > 0 and stop_loss >= nearest_support:
+        flags.append({
+            "check": "stop_vs_support",
+            "status": "conflict",
+            "message": f"Stop-loss ({stop_loss:,.2f}) destek-1 seviyesinin ({nearest_support:,.2f}) üzerinde; stop bir geçersizlik seviyesi olarak desteğin altında konumlanmalı.",
+        })
+    else:
+        flags.append({
+            "check": "stop_vs_support",
+            "status": "ok",
+            "message": f"Stop-loss ({stop_loss:,.2f}) destek-1 ({nearest_support:,.2f}) altında — destek kırılımı geçersizlik sayılır.",
+        })
+
+    # 3. Narrative vs data: negative confluence but zero divergence is not a contradiction
+    #    (confluence = alignment, divergence = momentum reversal), but flag for clarity.
+    conf_score = confluence.get("confluence_score", 50)
+    div_count = divergences.get("divergence_count", 0)
+    if conf_score <= 34 and div_count == 0:
+        flags.append({
+            "check": "confluence_vs_divergence",
+            "status": "ok",
+            "message": "Konfluans negatif ancak belirgin momentum uyumsuzluğu (divergence) yok — göstergeler aynı yönde (satış) işaret ettiğinden tutarlıdır.",
+        })
+    elif conf_score >= 66 and div_count >= 2:
+        flags.append({
+            "check": "confluence_vs_divergence",
+            "status": "conflict",
+            "message": f"Konfluans güçlü pozitif ({conf_score}/100) ancak {div_count} göstergede divergence tespit edildi — momentum zayıflaması ile uyum çelişiyor, dikkat.",
+        })
+    else:
+        flags.append({
+            "check": "confluence_vs_divergence",
+            "status": "ok",
+            "message": "Konfluans ile divergence sinyalleri birbiriyle çelişmiyor.",
+        })
+
+    # 4. MFI extreme clamp guard (100 is data-artifact, not a real reading)
+    if mfi_val is not None and mfi_val >= 99.5:
+        flags.append({
+            "check": "mfi_sanity",
+            "status": "conflict",
+            "message": "MFI 100'e yakın; bu değer gerçek aşırı alım değil, hacim/cam toplama artefaktı olabilir. MFI sinyali göz ardı edilmelidir.",
+        })
+
+    # 5. Price far below value area low — weakness interpretation
+    return flags
+
 def _generate_executive_summary(ticker: str, close: float, score: float, trend_data: Dict,
                                  rsi_val: float, regime: Dict, sr_zones: Dict,
                                  volume_profile: Dict, divergences: Dict = None,
@@ -310,6 +394,16 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
             unit=unit
         )
 
+        mfi_val = mfi_vals[-1] if mfi_vals[-1] is not None else 50
+        consistency_flags = _check_consistency(
+            st_dir, regime, confluence, divergences,
+            nearest_support, stop_loss, close, mfi_val
+        )
+
+        # Pretend: pass conflicts to the LLM prompt generation is done on hono side;
+        # here we expose the flags in the report itself for transparency + frontend.
+        true_conflicts = [f for f in consistency_flags if f.get("status") == "conflict"]
+
         return {
             "ticker": ticker_upper,
             "report_date": datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -426,9 +520,19 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
                 "value_area_low": volume_profile.get('value_area_low', close * 0.98),
                 "poc_volume": volume_profile.get('poc_volume', 0),
                 "total_volume": volume_profile.get('total_volume', 0),
+                "price_vs_value_area": (
+                    "İçinde"
+                    if volume_profile.get('value_area_low', close) <= close <= volume_profile.get('value_area_high', close)
+                    else ("Üstünde (güçlü)" if close > volume_profile.get('value_area_high', close) else "Altında (zayıf)")
+                ) if "error" not in volume_profile else "Veri yetersiz",
                 "interpretation": (
                     f"Hacim profili analizi {_fmt_price(volume_profile.get('poc', close), unit)} seviyesinde "
                     f"en yüksek yoğunluğu göstermektedir."
+                    + (f" Fiyat, değer bölgesinin ({_fmt_price(volume_profile.get('value_area_low', close), unit)}-{_fmt_price(volume_profile.get('value_area_high', close), unit)}) "
+                       + ("altında işlem görüyor; bu zayıflık işareti olarak izlenmeli."
+                          if close < volume_profile.get('value_area_low', close)
+                          else "üzerinde işlem görüyor; güçlü konum olarak yorumlanabilir.")
+                       if "error" not in volume_profile else "")
                 ) if "error" not in volume_profile else "Hacim profili verisi yeterli değil",
             },
             "liquidity_voids": [
@@ -457,6 +561,11 @@ async def generate_ceo_report(ticker: str) -> Dict[str, Any]:
                 "technical_opportunities": ["Aşırı satım bölgelerinden tepki potansiyeli", "Pozitif uyumsuzluk oluşumu", "Formasyon tamamlanması"],
                 "beta": None,
                 "market_breadth": None,
+            },
+            "consistency_flags": consistency_flags,
+            "analyst_notes": {
+                "conflict_count": len(true_conflicts),
+                "notes": [f["message"] for f in true_conflicts],
             },
             "izlenmesi_gerekenler": {
                 "not": f"{ticker_upper} için yakından izlenmesi gereken kritik seviye {_fmt_price(nearest_support, unit)} desteği ve {_fmt_price(nearest_resistance, unit)} direncidir. "

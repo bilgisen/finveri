@@ -6,6 +6,7 @@ from app.sources.pool import DataPool
 from app.sources.oyak import OyakSource
 from app.sources.aa import AASource
 from app.sources.aa_market import AAMarketSummarySource
+from app.sources.veribor import VeriborSource
 
 logger = logging.getLogger(__name__)
 
@@ -17,29 +18,26 @@ def build_pool() -> DataPool:
     """Kaynak zincirlerini tanımlar ve pool'u döner."""
     pool = DataPool()
 
-    # Enstrüman listesi: Oyak primary, AA fallback
+    # Enstrüman listesi: Oyak primary, veribor fallback, AA son çare
     pool.register(
         "instruments",
         primary=OyakSource(),
-        fallbacks=[AASource()],
+        fallbacks=[VeriborSource("instruments"), AASource()],
     )
 
-    # BIST hisseleri: AA primary, Oyak fallback
+    # BIST hisseleri: veribor primary (İşY bloklamasına karşı), AA fallback, Oyak son çare
     pool.register(
         "bist_stocks",
-        primary=AASource(),
-        fallbacks=[OyakSource()],
+        primary=VeriborSource("bist_stocks"),
+        fallbacks=[AASource(), OyakSource()],
     )
 
-    # Piyasa özeti (navbar ticker): sadece AA sağlıyor
+    # Piyasa özeti (navbar ticker): veribor primary, AA fallback
     pool.register(
         "market_summary",
-        primary=AAMarketSummarySource(),
+        primary=VeriborSource("market_summary"),
+        fallbacks=[AAMarketSummarySource()],
     )
-
-    # İleride eklenecek:
-    # pool.register("forex", primary=IsYatirimSource(), fallbacks=[OyakSource()])
-    # pool.register("indices", primary=AASource(), fallbacks=[IsYatirimSource()])
 
     return pool
 

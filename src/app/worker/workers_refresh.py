@@ -19,7 +19,8 @@ async def refresh_all(include_indices: bool = True, include_history: bool = Fals
     results = {}
     cache = get_cache() if is_ready() else None
 
-    # instruments: Oyak
+    # instruments: Oyak primary, veribor fallback
+    from app.sources.veribor import VeriborSource
     try:
         from app.sources.oyak import OyakSource
         source = OyakSource()
@@ -29,8 +30,15 @@ async def refresh_all(include_indices: bool = True, include_history: bool = Fals
             results["instruments"] = True
             logger.info("instruments: %d records from Oyak", len(result.data))
         else:
-            results["instruments"] = False
-            logger.warning("instruments: Oyak failed: %s", result.error)
+            logger.warning("instruments: Oyak failed: %s — veribor fallback", result.error)
+            result = await VeriborSource("instruments").async_fetch()
+            if result.success and result.data:
+                _write_to_cache(cache, "instruments", result)
+                results["instruments"] = True
+                logger.info("instruments: %d records from veribor", len(result.data))
+            else:
+                results["instruments"] = False
+                logger.warning("instruments: veribor failed: %s", result.error)
     except Exception as e:
         results["instruments"] = False
         logger.error("instruments: %s", e, exc_info=True)
@@ -38,36 +46,51 @@ async def refresh_all(include_indices: bool = True, include_history: bool = Fals
     # Load tickers into KV store so AASource can find them
     _load_tickers(cache)
 
-    # bist_stocks: AA (async with limited concurrency)
+    # bist_stocks: veribor primary (İşY bloklamasına karşı), AA fallback
     try:
-        from app.sources.aa import AASource
-        source = AASource()
-        result = await source.async_fetch(max_concurrent=20)
+        result = await VeriborSource("bist_stocks").async_fetch()
         if result.success and result.data:
             _write_to_cache(cache, "bist_stocks", result)
             results["bist_stocks"] = True
-            logger.info("bist_stocks: %d records from AA", len(result.data))
+            logger.info("bist_stocks: %d records from veribor", len(result.data))
             # Save daily OHLCV snapshot to D1 for volume profile
             await _save_daily_ohlcv(result.data)
         else:
-            results["bist_stocks"] = False
-            logger.warning("bist_stocks: AA failed: %s", result.error)
+            logger.warning("bist_stocks: veribor failed: %s — AA fallback", result.error)
+            from app.sources.aa import AASource
+            source = AASource()
+            result = await source.async_fetch(max_concurrent=20)
+            if result.success and result.data:
+                _write_to_cache(cache, "bist_stocks", result)
+                results["bist_stocks"] = True
+                logger.info("bist_stocks: %d records from AA", len(result.data))
+                await _save_daily_ohlcv(result.data)
+            else:
+                results["bist_stocks"] = False
+                logger.warning("bist_stocks: AA failed: %s", result.error)
     except Exception as e:
         results["bist_stocks"] = False
         logger.error("bist_stocks: %s", e, exc_info=True)
 
-    # market_summary: AA
+    # market_summary: veribor primary, AA fallback
     try:
-        from app.sources.aa_market import AAMarketSummarySource
-        source = AAMarketSummarySource()
-        result = source.fetch()
+        result = await VeriborSource("market_summary").async_fetch()
         if result.success and result.data:
             _write_to_cache(cache, "market_summary", result)
             results["market_summary"] = True
-            logger.info("market_summary: %d records from AA", len(result.data))
+            logger.info("market_summary: %d records from veribor", len(result.data))
         else:
-            results["market_summary"] = False
-            logger.warning("market_summary: AA failed: %s", result.error)
+            logger.warning("market_summary: veribor failed: %s — AA fallback", result.error)
+            from app.sources.aa_market import AAMarketSummarySource
+            source = AAMarketSummarySource()
+            result = source.fetch()
+            if result.success and result.data:
+                _write_to_cache(cache, "market_summary", result)
+                results["market_summary"] = True
+                logger.info("market_summary: %d records from AA", len(result.data))
+            else:
+                results["market_summary"] = False
+                logger.warning("market_summary: AA failed: %s", result.error)
     except Exception as e:
         results["market_summary"] = False
         logger.error("market_summary: %s", e, exc_info=True)

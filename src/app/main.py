@@ -18,7 +18,7 @@ except ImportError:
     _HAS_WORKER_DEPS = False
 
 try:
-    from app.core.workers_cache import cache_set
+    from app.core.workers_cache import cache_set, cache_get
     _HAS_KV = True
 except ImportError:
     _HAS_KV = False
@@ -80,25 +80,33 @@ def create_app() -> FastAPI:
     from app.core.redis_client import get_redis
 
     @app.get("/api/market/summary", tags=["compat"])
-    def market_summary_compat():
-        r = get_redis()
-        raw = r.get("pool:market_summary:data")
+    async def market_summary_compat():
+        from app.core.workers_cache import cache_get_kv
+        raw = cache_get("pool:market_summary:data")
+        if raw is None:
+            raw = await cache_get_kv("pool:market_summary:data")
         if not raw:
             from fastapi.responses import JSONResponse
             return JSONResponse({"total": 0, "data": [], "last_updated": None})
         data = json.loads(raw)
-        last_updated = r.get("pool:market_summary:last_updated")
+        last_updated = cache_get("pool:market_summary:last_updated")
+        if last_updated is None:
+            last_updated = await cache_get_kv("pool:market_summary:last_updated")
         return {"total": len(data), "last_updated": last_updated, "data": data}
 
     @app.get("/api/market/stocks", tags=["compat"])
-    def market_stocks_compat():
-        r = get_redis()
-        raw = r.get("pool:bist_stocks:data")
+    async def market_stocks_compat():
+        from app.core.workers_cache import cache_get_kv
+        raw = cache_get("pool:bist_stocks:data")
+        if raw is None:
+            raw = await cache_get_kv("pool:bist_stocks:data")
         if not raw:
             from fastapi.responses import JSONResponse
             return JSONResponse({"total": 0, "data": [], "last_updated": None})
         data = json.loads(raw)
-        last_updated = r.get("pool:bist_stocks:last_updated")
+        last_updated = cache_get("pool:bist_stocks:last_updated")
+        if last_updated is None:
+            last_updated = await cache_get_kv("pool:bist_stocks:last_updated")
         return {"total": len(data), "last_updated": last_updated, "data": data}
 
     @app.on_event("startup")

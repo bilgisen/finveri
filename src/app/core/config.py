@@ -45,6 +45,12 @@ class Settings:
         "ISYATIRIM_QUOTE_URL",
         "https://www.isyatirim.com.tr/_layouts/15/Isyatirim.Website/Common/Data.aspx/OneEndeks",
     )
+
+    # veribor (FastAPI Cloud) — alternatif fiyat kaynağı (İşY bloklamasına karşı)
+    VERIBOR_API_URL: str = os.getenv(
+        "VERIBOR_API_URL",
+        "https://veribor.fastapicloud.dev",
+    )
     # On-demand cache süresi (saniye) — kısa tutulur, veri sık değişir
     ONDEMAND_CACHE_TTL_SECONDS: int = int(os.getenv("ONDEMAND_CACHE_TTL_SECONDS", "60"))
 

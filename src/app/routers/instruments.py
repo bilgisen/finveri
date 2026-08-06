@@ -62,22 +62,35 @@ def _filter_by_index(data: List[dict], index: str) -> List[dict]:
     return [s for s in data if (s.get("code") or "").upper() in member_codes]
 
 
-def _read_cache(data_type: str):
+async def _read_cache(data_type: str):
     if not _HAS_REDIS:
         return None, None
     r = get_redis()
-    raw = r.get(_KEY_DATA.format(data_type=data_type))
-    last_updated = r.get(_KEY_LAST_UPDATED.format(data_type=data_type))
+    key = _KEY_DATA.format(data_type=data_type)
+    lu_key = _KEY_LAST_UPDATED.format(data_type=data_type)
+    raw = r.get(key)
+    last_updated = r.get(lu_key)
+    if raw is not None:
+        return (json.loads(raw) if raw else None), last_updated
+    # Memory miss → KV fallback. Pool keys are written by hono cron AND the
+    # 30-min refresh, often from a different isolate; memory is per-isolate,
+    # so a cold/warm isolate must not serve stale or empty data.
+    try:
+        from app.core.workers_cache import cache_get_kv
+        raw = await cache_get_kv(key)
+        last_updated = await cache_get_kv(lu_key)
+    except Exception as e:
+        logger.warning("KV fallback read failed for %s: %s", data_type, e)
     return (json.loads(raw) if raw else None), last_updated
 
 
 @router.get("/", response_model=InstrumentsResponse)
-def get_all_instruments(
+async def get_all_instruments(
     type: Optional[str] = Query(None, description="Tip filtresi: IMKB, Foreks, VIOP, ISEFunds"),
     search: Optional[str] = Query(None, description="Code veya Name içinde arama"),
 ):
     """Tüm enstrümanları döner (Oyak kaynağı — enstrüman listesi)."""
-    data, last_updated = _read_cache("instruments")
+    data, last_updated = await _read_cache("instruments")
 
     if data is None:
         raise HTTPException(
@@ -105,20 +118,20 @@ def get_all_instruments(
 
 
 @router.get("/types", response_model=List[str])
-def get_types():
+async def get_types():
     """Mevcut enstrüman tiplerini döner."""
-    data, _ = _read_cache("instruments")
+    data, _ = await _read_cache("instruments")
     if data is None:
         raise HTTPException(status_code=503, detail="Veri henüz cache'e alınmadı.")
     return sorted({i.get("type") for i in data if i.get("type")})
 
 
 @router.get("/stocks", response_model=StockQuotesResponse)
-def get_bist_stocks(
+async def get_bist_stocks(
     search: Optional[str] = Query(None, description="Code veya Name içinde arama"),
 ):
     """BIST hisse senetlerini fiyat verileriyle döner (AA kaynağı)."""
-    data, last_updated = _read_cache("bist_stocks")
+    data, last_updated = await _read_cache("bist_stocks")
 
     if data is None:
         return StockQuotesResponse(total=0, last_updated=None, data=[])
@@ -139,7 +152,7 @@ def get_bist_stocks(
 
 
 @router.get("/stocks/gainers", response_model=TopMoversResponse, tags=["movers"])
-def get_gainers(
+async def get_gainers(
     period: str = Query("daily", pattern="^(daily|weekly|monthly|yearly|ytd)$", description="Değişim periyodu"),
     sector: Optional[str] = Query(None, description="Sektör filtresi (tickers.json'daki sektör adı)"),
     index: Optional[str] = Query(None, description="Endeks kodu filtresi (bileşen listesi üzerinden, ör. XU100)"),
@@ -152,7 +165,7 @@ def get_gainers(
     """
     from app.services.periodic_movers import compute_periodic_movers
 
-    data, last_updated = _read_cache("bist_stocks")
+    data, last_updated = await _read_cache("bist_stocks")
     if data is None:
         raise HTTPException(status_code=503, detail="BIST fiyat verisi henüz cache'e alınmadı.")
 
@@ -171,7 +184,7 @@ def get_gainers(
 
 
 @router.get("/stocks/losers", response_model=TopMoversResponse, tags=["movers"])
-def get_losers(
+async def get_losers(
     period: str = Query("daily", pattern="^(daily|weekly|monthly|yearly|ytd)$", description="Değişim periyodu"),
     sector: Optional[str] = Query(None, description="Sektör filtresi (tickers.json'daki sektör adı)"),
     index: Optional[str] = Query(None, description="Endeks kodu filtresi (bileşen listesi üzerinden, ör. XU100)"),
@@ -183,7 +196,7 @@ def get_losers(
     """
     from app.services.periodic_movers import compute_periodic_movers
 
-    data, last_updated = _read_cache("bist_stocks")
+    data, last_updated = await _read_cache("bist_stocks")
     if data is None:
         raise HTTPException(status_code=503, detail="BIST fiyat verisi henüz cache'e alınmadı.")
 
@@ -202,9 +215,9 @@ def get_losers(
 
 
 @router.get("/stocks/{code}", response_model=StockQuote)
-def get_stock_by_code(code: str):
+async def get_stock_by_code(code: str):
     """Belirli bir hissenin fiyat verisini döner (AA kaynağı)."""
-    data, _ = _read_cache("bist_stocks")
+    data, _ = await _read_cache("bist_stocks")
     if data is None:
         raise HTTPException(status_code=503, detail="BIST fiyat verisi henüz cache'e alınmadı.")
 
@@ -356,7 +369,7 @@ async def get_stock_summary_card(code: str):
     ticker_upper = code.upper()
     live_price = result.get("close", 0.0)
     
-    data, _ = _read_cache("bist_stocks")
+    data, _ = await _read_cache("bist_stocks")
     diff_percent = 0.0
     diff_price = 0.0
     display_name = ticker_upper
@@ -388,14 +401,14 @@ async def get_stock_summary_card(code: str):
 
 
 @router.get("/market-summary", response_model=MarketSummaryResponse, tags=["market"])
-def get_market_summary(
+async def get_market_summary(
     category: Optional[str] = Query(None, description="Kategori filtresi: forex, index, commodity, crypto, gold, repo, viop"),
 ):
     """
     Piyasa özeti — Brent, Altın, USD/TRY, EUR/TRY, BIST 100/500, Bitcoin vb.
     Sitelerin header ticker bandı için tasarlanmıştır.
     """
-    data, last_updated = _read_cache("market_summary")
+    data, last_updated = await _read_cache("market_summary")
 
     if data is None:
         return MarketSummaryResponse(total=0, last_updated=None, data=[])
@@ -411,12 +424,12 @@ def get_market_summary(
 
 
 @router.get("/indices", tags=["indices"])
-def get_indices():
+async def get_indices():
     """Bilinen BIST endeks listesini fiyat verileriyle döner."""
     from app.core.index_store import get_all_indices
     indices = get_all_indices()
     
-    data, last_updated = _read_cache("market_summary")
+    data, last_updated = await _read_cache("market_summary")
     
     result = []
     for code, info in indices.items():
@@ -530,9 +543,9 @@ def get_ticker_info(code: str):
 
 
 @router.get("/{code}", response_model=Instrument)
-def get_instrument_by_code(code: str):
+async def get_instrument_by_code(code: str):
     """Belirli bir enstrümanı code ile döner (enstrüman listesinden)."""
-    data, _ = _read_cache("instruments")
+    data, _ = await _read_cache("instruments")
     if data is None:
         raise HTTPException(status_code=503, detail="Veri henüz cache'e alınmadı.")
 
